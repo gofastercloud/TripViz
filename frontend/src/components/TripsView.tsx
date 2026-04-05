@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import type { Trip, Photo } from "../types";
 import { getTrips, createTrip, updateTrip, deleteTrip, getPhotos, thumbnailUrl } from "../api/client";
 import PhotoLightbox from "./PhotoLightbox";
+import TripReplay from "./TripReplay";
 
 interface Props {
   trips: Trip[];
@@ -27,6 +28,7 @@ export default function TripsView({ trips, onTripsChange }: Props) {
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [photoTotal, setPhotoTotal] = useState(0);
   const [photoPage, setPhotoPage] = useState(1);
+  const [showReplay, setShowReplay] = useState(false);
 
   const selectedTrip = tripId ? trips.find(t => t.id === Number(tripId)) : null;
 
@@ -204,6 +206,18 @@ export default function TripsView({ trips, onTripsChange }: Props) {
                 <span style={{ color: "var(--text2)", fontSize: 13 }}>
                   {photoTotal} photo{photoTotal !== 1 ? "s" : ""}
                 </span>
+                <button
+                  onClick={() => setShowReplay(true)}
+                  style={{
+                    marginLeft: "auto",
+                    padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+                    background: "var(--bg3)", border: "1px solid var(--border)",
+                    color: "var(--text2)",
+                  }}
+                  title="Replay this trip on the map"
+                >
+                  ▶ Replay
+                </button>
               </div>
               {selectedTrip.description && (
                 <div style={{ color: "var(--text2)", fontSize: 13, marginTop: 4 }}>
@@ -278,6 +292,14 @@ export default function TripsView({ trips, onTripsChange }: Props) {
           </div>
         )}
       </div>
+
+      {showReplay && selectedTrip && (
+        <TripReplay
+          tripId={selectedTrip.id}
+          tripName={selectedTrip.name}
+          onClose={() => setShowReplay(false)}
+        />
+      )}
 
       {lightboxId !== null && (
         <PhotoLightbox

@@ -7,6 +7,7 @@ import PeopleView from "./components/PeopleView";
 import KitView from "./components/KitView";
 import IndexingPanel from "./components/IndexingPanel";
 import MLPanel from "./components/MLPanel";
+import TripDetector from "./components/TripDetector";
 import type { Trip, Stats } from "./types";
 import { getTrips, getStats } from "./api/client";
 
@@ -15,6 +16,7 @@ export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [showIndexing, setShowIndexing] = useState(false);
   const [showML, setShowML] = useState(false);
+  const [showDetector, setShowDetector] = useState(false);
   const navigate = useNavigate();
 
   const loadTrips = useCallback(async () => {
@@ -100,6 +102,16 @@ export default function App() {
         {/* Action buttons */}
         <div style={{ padding: "10px 16px 14px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 6 }}>
           <button
+            onClick={() => setShowDetector(true)}
+            style={{
+              width: "100%", padding: "7px 12px",
+              borderRadius: "var(--radius)", fontSize: 12, fontWeight: 600,
+              border: "1px solid var(--border)", color: "var(--text2)",
+            }}
+          >
+            🔍 Detect Trips
+          </button>
+          <button
             onClick={() => setShowML(true)}
             style={{
               width: "100%", padding: "7px 12px",
@@ -140,6 +152,13 @@ export default function App() {
       )}
       {showML && (
         <MLPanel onClose={() => setShowML(false)} onDone={refresh} />
+      )}
+      {showDetector && (
+        <TripDetector
+          trips={trips}
+          onClose={() => setShowDetector(false)}
+          onTripsCreated={() => { refresh(); setShowDetector(false); }}
+        />
       )}
     </div>
   );

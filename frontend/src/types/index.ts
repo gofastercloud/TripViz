@@ -103,6 +103,43 @@ export interface Person {
   cover_face: FaceBox | null;
 }
 
+// ── Trip detection / replay ──────────────────────────────────────
+
+export interface DetectedTrip {
+  cluster_id: number;
+  suggested_name: string;
+  location_name: string;
+  start_date: string;
+  end_date: string;
+  duration_hours: number;
+  photo_count: number;
+  gps_count: number;
+  no_gps_count: number;
+  centroid_lat: number | null;
+  centroid_lon: number | null;
+  already_assigned: number;
+  existing_trip_ids: number[];
+  photo_ids: number[];
+}
+
+export interface ReplayFrame {
+  photo_id: number;
+  filename: string;
+  timestamp: string;
+  lat: number | null;
+  lon: number | null;
+  has_gps: boolean;
+  is_interpolated: boolean;
+  trip_color: string;
+}
+
+export interface ReplayData {
+  trip: { id: number; name: string; color: string };
+  frames: ReplayFrame[];
+  path: { lat: number; lon: number; is_interpolated: boolean }[];
+  stats: { total: number; gps: number; interpolated: number; no_location: number };
+}
+
 export interface BatchAnalysisStatus {
   running: boolean;
   task: string;

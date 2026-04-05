@@ -149,6 +149,19 @@ export const getPersonPhotos = (id: number, page = 1, perPage = 50) =>
 export const getPhotoFaces = (photoId: number) =>
   request<FaceBox[]>(`/ml/photos/${photoId}/faces`);
 
+// ── Trip Detection & Replay ───────────────────────────────────────
+import type { DetectedTrip, ReplayData } from "../types";
+
+export const detectTrips = (gapHours = 6, minPhotos = 3, geocode = true) =>
+  request<{ trips: DetectedTrip[]; total: number }>(
+    `/detect/trips?gap_hours=${gapHours}&min_photos=${minPhotos}&geocode=${geocode}`,
+  );
+
+export const getTripReplay = (tripId: number, interpolationWindowHours = 2) =>
+  request<ReplayData>(
+    `/detect/replay/${tripId}?interpolation_window_hours=${interpolationWindowHours}`,
+  );
+
 // ── Kit List ─────────────────────────────────────────────────────
 export interface KitDevice {
   make: string | null;
