@@ -64,6 +64,9 @@ class Photo(Base):
     orientation: Mapped[int] = mapped_column(Integer, default=1)
     has_thumbnail: Mapped[bool] = mapped_column(Boolean, default=False)
     trip_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+    lens_model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(250), nullable=True)
+    tags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list of location tags
     # ML analysis
     activities: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list of strings
     face_analyzed: Mapped[bool] = mapped_column(Boolean, default=False)

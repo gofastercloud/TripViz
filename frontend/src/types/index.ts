@@ -9,10 +9,13 @@ export interface Photo {
   file_size: number;
   camera_make: string | null;
   camera_model: string | null;
+  lens_model: string | null;
   has_thumbnail: boolean;
   trip_id: number | null;
   trip_color: string | null;
   trip_name: string | null;
+  notes: string | null;
+  tags: string | null;          // JSON-encoded string[] of location tags
   // ML
   activities: string | null;   // JSON-encoded string[] e.g. '["beach","hiking"]'
   face_analyzed: boolean;
@@ -27,6 +30,8 @@ export interface MapPin {
   trip_id: number | null;
   trip_color: string | null;
   trip_name: string | null;
+  count: number;
+  photo_ids: number[];
 }
 
 export interface Trip {
@@ -120,6 +125,8 @@ export interface DetectedTrip {
   already_assigned: number;
   existing_trip_ids: number[];
   photo_ids: number[];
+  preview_pins: { id: number; lat: number; lon: number }[];
+  preview_photo_ids: number[];
 }
 
 export interface ReplayFrame {

@@ -350,3 +350,4 @@ backend/thumbnails/
 backend/venv/
 backend/tripviz.log
 frontend/dist/
+backend/ml_models/

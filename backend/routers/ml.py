@@ -3,7 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
-from database import get_db, SessionLocal
+import database as _db_module
+from database import get_db
 import ml as ml_engine
 from models import Photo, Face, Person
 
@@ -46,37 +47,8 @@ def download_models():
 #  Single-photo analysis
 # ──────────────────────────────────────────────────────────
 
-class AnalyzeRequest(BaseModel):
-    run_faces: bool = True
-    run_activities: bool = True
-    device: str = "cpu"
-
-
-@router.post("/analyze/{photo_id}")
-def analyze_photo(photo_id: int, req: AnalyzeRequest, db: Session = Depends(get_db)):
-    caps = ml_engine.detect_capabilities()
-    if req.run_faces and not caps["face_detection_ready"]:
-        raise HTTPException(status_code=400, detail="Face detection not ready — check capabilities")
-    if req.run_activities and not caps["activity_detection_ready"]:
-        raise HTTPException(status_code=400, detail="Activity detection not ready — check capabilities")
-
-    result = ml_engine.analyze_photo(
-        photo_id, db,
-        run_faces=req.run_faces,
-        run_activities=req.run_activities,
-        device=req.device,
-    )
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-
-    # Return updated face records with person info
-    faces = db.query(Face).filter(Face.photo_id == photo_id).all()
-    result["faces"] = [_face_dict(f) for f in faces]
-    return result
-
-
 # ──────────────────────────────────────────────────────────
-#  Batch analysis
+#  Batch analysis (must be registered BEFORE /analyze/{photo_id})
 # ──────────────────────────────────────────────────────────
 
 class BatchAnalyzeRequest(BaseModel):
@@ -121,7 +93,7 @@ def batch_analyze(req: BatchAnalyzeRequest, db: Session = Depends(get_db)):
             run_faces=req.run_faces,
             run_activities=req.run_activities,
             device=req.device,
-            db_factory=SessionLocal,
+            db_factory=_db_module.SessionLocal,
         )
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -132,6 +104,39 @@ def batch_analyze(req: BatchAnalyzeRequest, db: Session = Depends(get_db)):
 @router.get("/analyze/batch/status")
 def batch_status():
     return ml_engine.get_batch_state()
+
+
+# ──────────────────────────────────────────────────────────
+#  Single-photo analysis
+# ──────────────────────────────────────────────────────────
+
+class AnalyzeRequest(BaseModel):
+    run_faces: bool = True
+    run_activities: bool = True
+    device: str = "cpu"
+
+
+@router.post("/analyze/{photo_id}")
+def analyze_photo(photo_id: int, req: AnalyzeRequest, db: Session = Depends(get_db)):
+    caps = ml_engine.detect_capabilities()
+    if req.run_faces and not caps["face_detection_ready"]:
+        raise HTTPException(status_code=400, detail="Face detection not ready — check capabilities")
+    if req.run_activities and not caps["activity_detection_ready"]:
+        raise HTTPException(status_code=400, detail="Activity detection not ready — check capabilities")
+
+    result = ml_engine.analyze_photo(
+        photo_id, db,
+        run_faces=req.run_faces,
+        run_activities=req.run_activities,
+        device=req.device,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    # Return updated face records with person info
+    faces = db.query(Face).filter(Face.photo_id == photo_id).all()
+    result["faces"] = [_face_dict(f) for f in faces]
+    return result
 
 
 # ──────────────────────────────────────────────────────────

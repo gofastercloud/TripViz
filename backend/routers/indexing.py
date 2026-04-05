@@ -2,7 +2,8 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from database import get_db, SessionLocal
+import database as _db_module
+from database import get_db
 from indexer import run_indexing, get_index_state
 
 router = APIRouter(prefix="/api/index", tags=["indexing"])
@@ -25,7 +26,7 @@ def start_indexing(data: IndexRequest, db: Session = Depends(get_db)):
 
     # Run indexing in a background thread with its own DB session
     def _run():
-        session = SessionLocal()
+        session = _db_module.SessionLocal()
         try:
             run_indexing(data.directory, session, data.force_reindex)
         finally:

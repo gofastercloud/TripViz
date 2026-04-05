@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { Trip, FaceBox } from "../types";
-import { getPhoto, assignTrip, imageUrl, thumbnailUrl, getPhotoFaces, analyzePhoto, editPhotoPreview, editPhotoSave } from "../api/client";
+import { getPhoto, getPhotoExif, assignTrip, updateNotes, imageUrl, thumbnailUrl, getPhotoFaces, analyzePhoto, editPhotoPreview, editPhotoSave } from "../api/client";
 import type { EditParams } from "../api/client";
 
 interface Props {
@@ -15,7 +15,7 @@ interface Props {
 export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, onNext, onPrev }: Props) {
   const [photo, setPhoto] = useState<Awaited<ReturnType<typeof getPhoto>> | null>(null);
   const [assigning, setAssigning] = useState(false);
-  const [activeTab, setActiveTab] = useState<"info" | "histogram" | "ml" | "edit">("info");
+  const [activeTab, setActiveTab] = useState<"info" | "notes" | "histogram" | "ml" | "edit">("info");
   const [faces, setFaces] = useState<FaceBox[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
@@ -160,7 +160,7 @@ export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, o
 
         {/* Side panel */}
         <div style={{
-          width: 268, flexShrink: 0,
+          width: 300, flexShrink: 0,
           background: "var(--bg2)", borderLeft: "1px solid var(--border)",
           display: "flex", flexDirection: "column", overflow: "hidden",
         }}>
@@ -170,7 +170,7 @@ export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, o
             padding: "10px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0,
           }}>
             <div style={{ display: "flex", gap: 2 }}>
-              {(["info", "histogram", "ml", "edit"] as const).map(t => (
+              {(["info", "notes", "histogram", "ml", "edit"] as const).map(t => (
                 <TabBtn key={t} label={t === "ml" ? "ML" : t.charAt(0).toUpperCase() + t.slice(1)}
                   active={activeTab === t} onClick={() => setActiveTab(t)} />
               ))}
@@ -181,7 +181,9 @@ export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, o
           <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
             {photo ? (
               activeTab === "info" ? (
-                <InfoPanel photo={photo} trips={trips} assigning={assigning} onAssign={handleAssign} />
+                <InfoPanel photo={photo} trips={trips} assigning={assigning} onAssign={handleAssign} onPhotoUpdate={setPhoto} />
+              ) : activeTab === "notes" ? (
+                <NotesTagsPanel photo={photo} onPhotoUpdate={setPhoto} />
               ) : activeTab === "histogram" ? (
                 <HistogramPanel photoId={photoId} />
               ) : activeTab === "edit" ? (
@@ -561,13 +563,42 @@ function FaceCrop({ face, size }: { face: FaceBox; size: number }) {
 
 // ── Info panel ────────────────────────────────────────────────────
 
-function InfoPanel({ photo, trips, assigning, onAssign }: {
+function InfoPanel({ photo, trips, assigning, onAssign, onPhotoUpdate }: {
   photo: NonNullable<Awaited<ReturnType<typeof getPhoto>>>;
   trips: Trip[];
   assigning: boolean;
   onAssign: (id: number | null) => void;
+  onPhotoUpdate: (p: NonNullable<Awaited<ReturnType<typeof getPhoto>>>) => void;
 }) {
+  const [exif, setExif] = useState<Record<string, unknown> | null>(null);
+  const [exifLoading, setExifLoading] = useState(true);
+
+  useEffect(() => {
+    setExifLoading(true);
+    getPhotoExif(photo.id).then(setExif).catch(() => setExif(null)).finally(() => setExifLoading(false));
+  }, [photo.id]);
+
   const activities = photo.activities ? JSON.parse(photo.activities) as string[] : [];
+
+  // Helper to format shutter speed from decimal seconds
+  const fmtShutter = (v: unknown): string => {
+    if (typeof v === "number") return v >= 1 ? `${v}s` : `1/${Math.round(1 / v)}s`;
+    return String(v ?? "");
+  };
+
+  const fmtFocal = (v: unknown): string => {
+    if (typeof v === "number") return `${v}mm`;
+    return String(v ?? "");
+  };
+
+  const fmtAperture = (v: unknown): string => {
+    if (typeof v === "number") return `f/${v}`;
+    return String(v ?? "");
+  };
+
+  // Extract GPS display
+  const gps = exif?.GPS as Record<string, unknown> | undefined;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ fontSize: 12, fontWeight: 600, wordBreak: "break-all" }}>{photo.filename}</div>
@@ -576,27 +607,74 @@ function InfoPanel({ photo, trips, assigning, onAssign }: {
         {photo.date_taken ? new Date(photo.date_taken).toLocaleString() : "Unknown"}
       </InfoRow>
 
+      {/* Camera & Lens */}
       {(photo.camera_make || photo.camera_model) && (
         <InfoRow label="Camera">
           {[photo.camera_make, photo.camera_model].filter(Boolean).join(" ")}
         </InfoRow>
       )}
 
-      {photo.width && photo.height && (
-        <InfoRow label="Dimensions">{photo.width} × {photo.height}</InfoRow>
+      {exif?.LensModel != null && (
+        <InfoRow label="Lens">{String(exif.LensModel)}</InfoRow>
       )}
 
-      <InfoRow label="File size">{formatBytes(photo.file_size)}</InfoRow>
+      {/* Exposure section */}
+      {exif && (exif.ExposureTime != null || exif.FNumber != null || exif.ISOSpeedRatings != null) && (
+        <div>
+          <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 5 }}>Exposure</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 12px", fontSize: 12 }}>
+            {exif.ExposureTime != null && <><span style={{ color: "var(--text2)" }}>Shutter</span><span>{fmtShutter(exif.ExposureTime)}</span></>}
+            {exif.FNumber != null && <><span style={{ color: "var(--text2)" }}>Aperture</span><span>{fmtAperture(exif.FNumber)}</span></>}
+            {exif.ISOSpeedRatings != null && <><span style={{ color: "var(--text2)" }}>ISO</span><span>{String(exif.ISOSpeedRatings)}</span></>}
+            {exif.FocalLength != null && <><span style={{ color: "var(--text2)" }}>Focal length</span><span>{fmtFocal(exif.FocalLength)}</span></>}
+            {exif.FocalLengthIn35mmFilm != null && <><span style={{ color: "var(--text2)" }}>35mm equiv.</span><span>{fmtFocal(exif.FocalLengthIn35mmFilm)}</span></>}
+            {exif.ExposureBiasValue != null && <><span style={{ color: "var(--text2)" }}>Exp. comp.</span><span>{Number(exif.ExposureBiasValue) >= 0 ? "+" : ""}{Number(exif.ExposureBiasValue).toFixed(1)} EV</span></>}
+            {exif.MeteringMode != null && <><span style={{ color: "var(--text2)" }}>Metering</span><span>{METERING_MODES[Number(exif.MeteringMode)] ?? String(exif.MeteringMode)}</span></>}
+            {exif.Flash != null && <><span style={{ color: "var(--text2)" }}>Flash</span><span>{Number(exif.Flash) & 1 ? "Fired" : "No flash"}</span></>}
+            {exif.WhiteBalance != null && <><span style={{ color: "var(--text2)" }}>White bal.</span><span>{Number(exif.WhiteBalance) === 0 ? "Auto" : "Manual"}</span></>}
+          </div>
+        </div>
+      )}
 
+      {/* Dimensions & file */}
+      <div>
+        <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 5 }}>Image</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 12px", fontSize: 12 }}>
+          {photo.width && photo.height && <><span style={{ color: "var(--text2)" }}>Resolution</span><span>{photo.width} × {photo.height}</span></>}
+          {photo.width && photo.height && <><span style={{ color: "var(--text2)" }}>Megapixels</span><span>{((photo.width * photo.height) / 1e6).toFixed(1)} MP</span></>}
+          <><span style={{ color: "var(--text2)" }}>File size</span><span>{formatBytes(photo.file_size)}</span></>
+          {exif?.ColorSpace != null && <><span style={{ color: "var(--text2)" }}>Color space</span><span>{Number(exif.ColorSpace) === 1 ? "sRGB" : Number(exif.ColorSpace) === 0xFFFF ? "Uncalibrated" : String(exif.ColorSpace)}</span></>}
+        </div>
+      </div>
+
+      {/* GPS */}
       {photo.latitude != null && photo.longitude != null && (
-        <InfoRow label="GPS">
-          <a
-            href={`https://www.openstreetmap.org/?mlat=${photo.latitude}&mlon=${photo.longitude}&zoom=14`}
-            target="_blank" rel="noreferrer" style={{ fontSize: 12 }}
-          >
-            {photo.latitude.toFixed(5)}, {photo.longitude.toFixed(5)} ↗
-          </a>
-        </InfoRow>
+        <div>
+          <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 5 }}>Location</div>
+          <div style={{ fontSize: 12, marginBottom: 4 }}>
+            <a
+              href={`https://www.openstreetmap.org/?mlat=${photo.latitude}&mlon=${photo.longitude}&zoom=14`}
+              target="_blank" rel="noreferrer"
+            >
+              {photo.latitude.toFixed(5)}, {photo.longitude.toFixed(5)} ↗
+            </a>
+          </div>
+          {gps?.GPSAltitude != null && (
+            <div style={{ fontSize: 12, color: "var(--text2)" }}>
+              Altitude: {Number(gps.GPSAltitude).toFixed(1)}m {gps.GPSAltitudeRef === 1 ? "below sea level" : ""}
+            </div>
+          )}
+          {gps?.GPSSpeed != null && (
+            <div style={{ fontSize: 12, color: "var(--text2)" }}>
+              Speed: {Number(gps.GPSSpeed).toFixed(1)} {gps.GPSSpeedRef === "K" ? "km/h" : gps.GPSSpeedRef === "M" ? "mph" : "knots"}
+            </div>
+          )}
+          {gps?.GPSImgDirection != null && (
+            <div style={{ fontSize: 12, color: "var(--text2)" }}>
+              Direction: {Number(gps.GPSImgDirection).toFixed(0)}°
+            </div>
+          )}
+        </div>
       )}
 
       {activities.length > 0 && (
@@ -632,6 +710,132 @@ function InfoPanel({ photo, trips, assigning, onAssign }: {
           {trips.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
       </div>
+
+      {/* Raw EXIF data (collapsible) */}
+      {exif && !exifLoading && <ExifRawSection exif={exif} />}
+    </div>
+  );
+}
+
+const METERING_MODES: Record<number, string> = {
+  0: "Unknown", 1: "Average", 2: "Center-weighted", 3: "Spot",
+  4: "Multi-spot", 5: "Pattern", 6: "Partial",
+};
+
+function ExifRawSection({ exif }: { exif: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  const SKIP = new Set(["MakerNote", "UserComment", "ExifOffset", "GPSInfo", "PrintImageMatching", "ComponentsConfiguration", "FlashPixVersion", "ExifVersion"]);
+  const entries = Object.entries(exif).filter(([k]) => !SKIP.has(k) && k !== "GPS");
+
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} style={{
+        fontSize: 10, color: "var(--text2)", textTransform: "uppercase",
+        background: "none", border: "none", cursor: "pointer", padding: 0,
+      }}>
+        {open ? "▾" : "▸"} All EXIF tags ({entries.length})
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, fontSize: 11, maxHeight: 300, overflowY: "auto" }}>
+          {entries.map(([k, v]) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "2px 0", borderBottom: "1px solid var(--border)" }}>
+              <span style={{ color: "var(--text2)", flexShrink: 0 }}>{k}</span>
+              <span style={{ textAlign: "right", wordBreak: "break-all" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotesTagsPanel({ photo, onPhotoUpdate }: {
+  photo: NonNullable<Awaited<ReturnType<typeof getPhoto>>>;
+  onPhotoUpdate: (p: NonNullable<Awaited<ReturnType<typeof getPhoto>>>) => void;
+}) {
+  const [notesValue, setNotesValue] = useState(photo.notes ?? "");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { setNotesValue(photo.notes ?? ""); }, [photo.id, photo.notes]);
+
+  const saveNotes = useCallback((value: string) => {
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    notesTimerRef.current = setTimeout(async () => {
+      setNotesSaving(true);
+      try {
+        const updated = await updateNotes(photo.id, value || null);
+        onPhotoUpdate(updated);
+      } catch {}
+      setNotesSaving(false);
+    }, 600);
+  }, [photo.id, onPhotoUpdate]);
+
+  const locationTags = photo.tags ? JSON.parse(photo.tags) as string[] : [];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Notes */}
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+          <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase" }}>Notes</div>
+          {notesSaving && <span style={{ fontSize: 10, color: "var(--text2)" }}>saving...</span>}
+        </div>
+        <textarea
+          value={notesValue}
+          onChange={e => {
+            const v = e.target.value.slice(0, 250);
+            setNotesValue(v);
+            saveNotes(v);
+          }}
+          placeholder="Add a note about this photo..."
+          maxLength={250}
+          rows={4}
+          style={{
+            width: "100%", fontSize: 12, resize: "vertical",
+            padding: "8px 10px", borderRadius: 6,
+            background: "var(--bg3)", border: "1px solid var(--border)",
+            color: "var(--text)",
+          }}
+        />
+        <div style={{ fontSize: 10, color: "var(--text2)", textAlign: "right", marginTop: 2 }}>
+          {notesValue.length}/250
+        </div>
+      </div>
+
+      {/* Location tags */}
+      <div>
+        <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 6 }}>Location Tags</div>
+        {locationTags.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {locationTags.map(t => (
+              <span key={t} style={{
+                background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.25)",
+                color: "#22C55E", padding: "3px 10px", borderRadius: 12, fontSize: 12,
+              }}>{t}</span>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--text2)" }}>
+            No location tags — photo may lack GPS data or hasn't been geo-tagged yet.
+          </div>
+        )}
+      </div>
+
+      {/* Activity tags (from ML) */}
+      {photo.activities && (
+        <div>
+          <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 6 }}>Activity Tags</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {(JSON.parse(photo.activities) as string[]).map(a => (
+              <span key={a} style={{
+                background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)",
+                color: "var(--accent)", padding: "3px 10px", borderRadius: 12, fontSize: 12,
+              }}>{a}</span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -793,7 +997,7 @@ function NavBtn({ direction, onClick }: { direction: "prev" | "next"; onClick: (
 function TabBtn({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button onClick={onClick} style={{
-      padding: "4px 10px", borderRadius: 4, fontSize: 12, fontWeight: active ? 600 : 400,
+      padding: "4px 8px", borderRadius: 4, fontSize: 11, fontWeight: active ? 600 : 400,
       background: active ? "var(--bg3)" : "transparent",
       color: active ? "var(--text)" : "var(--text2)",
       border: "1px solid " + (active ? "var(--border)" : "transparent"),

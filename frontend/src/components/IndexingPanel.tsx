@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { startIndexing, getIndexStatus } from "../api/client";
 import type { IndexStatus } from "../types";
 
@@ -25,41 +25,78 @@ const QUICK_PATHS = [
 ];
 
 export default function IndexingPanel({ onClose, onDone }: Props) {
-  const [directory, setDirectory] = useState("");
+  const [directories, setDirectories] = useState<string[]>([]);
+  const [newDir, setNewDir] = useState("");
   const [forceReindex, setForceReindex] = useState(false);
   const [status, setStatus] = useState<IndexStatus | null>(null);
   const [error, setError] = useState("");
+  const [queueIndex, setQueueIndex] = useState(-1); // -1 = not running
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const queueRef = useRef<string[]>([]);
 
-  // Poll status if indexing is running
+  const addDirectory = () => {
+    const dir = newDir.trim();
+    if (dir && !directories.includes(dir)) {
+      setDirectories(prev => [...prev, dir]);
+      setNewDir("");
+    }
+  };
+
+  const removeDirectory = (idx: number) => {
+    setDirectories(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // Start processing the queue
+  const startQueue = useCallback(async () => {
+    if (directories.length === 0) return;
+    setError("");
+    queueRef.current = [...directories];
+    setQueueIndex(0);
+    await startNext(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directories, forceReindex]);
+
+  const startNext = async (idx: number) => {
+    const dirs = queueRef.current;
+    if (idx >= dirs.length) {
+      setQueueIndex(-1);
+      onDone();
+      return;
+    }
+    setQueueIndex(idx);
+    try {
+      await startIndexing(dirs[idx], forceReindex);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to start indexing");
+      setQueueIndex(-1);
+      return;
+    }
+  };
+
+  // Poll status
   useEffect(() => {
     const poll = async () => {
       try {
         const s = await getIndexStatus();
         setStatus(s);
-        if (!s.running && pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-          if (s.finished_at) onDone();
+        // When current directory finishes, start next
+        if (!s.running && queueIndex >= 0) {
+          const nextIdx = queueIndex + 1;
+          if (nextIdx < queueRef.current.length) {
+            await startNext(nextIdx);
+          } else {
+            setQueueIndex(-1);
+            onDone();
+          }
         }
       } catch {}
     };
 
-    poll(); // Check immediately
+    poll();
     pollRef.current = setInterval(poll, 1000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleStart = async () => {
-    setError("");
-    try {
-      await startIndexing(directory.trim(), forceReindex);
-      const s = await getIndexStatus();
-      setStatus(s);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to start indexing");
-    }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueIndex]);
 
   const isRunning = status?.running ?? false;
   const progress = status && status.total > 0
@@ -89,45 +126,77 @@ export default function IndexingPanel({ onClose, onDone }: Props) {
 
         {!isRunning ? (
           <>
-            <div style={{ marginBottom: 16 }}>
+            {/* Directory input */}
+            <div style={{ marginBottom: 12 }}>
               <label style={{ display: "block", fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
-                Directory path
+                Add directories to index (searched recursively)
               </label>
-              <input
-                value={directory}
-                onChange={e => setDirectory(e.target.value)}
-                placeholder="e.g. C:\Users\You\Pictures  or  ~/Pictures"
-                style={{ width: "100%", padding: "8px 12px" }}
-                onKeyDown={e => { if (e.key === "Enter" && directory.trim()) handleStart(); }}
-              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={newDir}
+                  onChange={e => setNewDir(e.target.value)}
+                  placeholder="e.g. /Users/you/Pictures"
+                  style={{ flex: 1, padding: "8px 12px" }}
+                  onKeyDown={e => { if (e.key === "Enter" && newDir.trim()) addDirectory(); }}
+                />
+                <button
+                  onClick={addDirectory}
+                  disabled={!newDir.trim()}
+                  style={{
+                    padding: "8px 14px", borderRadius: 6, fontSize: 12,
+                    background: "var(--bg3)", border: "1px solid var(--border)",
+                    opacity: newDir.trim() ? 1 : 0.4,
+                  }}
+                >Add</button>
+              </div>
             </div>
 
-            {/* Quick path suggestions */}
+            {/* Directory list */}
+            {directories.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {directories.map((dir, i) => (
+                  <div key={i} style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "6px 10px", background: "var(--bg3)", borderRadius: 6,
+                    marginBottom: 4, fontSize: 12, fontFamily: "monospace",
+                  }}>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dir}</span>
+                    <button onClick={() => removeDirectory(i)} style={{ color: "var(--text2)", fontSize: 14, flexShrink: 0 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Quick paths */}
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 8 }}>Quick paths:</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {QUICK_PATHS.map(p => (
-                  <button
-                    key={p.path}
-                    onClick={() => setDirectory(p.path)}
-                    style={{
-                      textAlign: "left", padding: "6px 10px",
-                      background: directory === p.path ? "var(--bg3)" : "transparent",
-                      border: "1px solid var(--border)", borderRadius: 6,
-                      fontSize: 12,
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "var(--bg3)")}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = directory === p.path ? "var(--bg3)" : "transparent";
-                    }}
-                  >
-                    <div style={{ fontWeight: 500 }}>{p.label}</div>
-                    <div style={{ color: "var(--text2)", fontFamily: "monospace", fontSize: 11 }}>{p.path}</div>
-                    {p.note && (
-                      <div style={{ color: "#22C55E", fontSize: 10, marginTop: 2 }}>{p.note}</div>
-                    )}
-                  </button>
-                ))}
+                {QUICK_PATHS.map(p => {
+                  const added = directories.includes(p.path);
+                  return (
+                    <button
+                      key={p.path}
+                      onClick={() => {
+                        if (!added) setDirectories(prev => [...prev, p.path]);
+                      }}
+                      style={{
+                        textAlign: "left", padding: "6px 10px",
+                        background: added ? "var(--bg3)" : "transparent",
+                        border: "1px solid var(--border)", borderRadius: 6,
+                        fontSize: 12, opacity: added ? 0.6 : 1,
+                      }}
+                    >
+                      <div style={{ fontWeight: 500 }}>
+                        {p.label}
+                        {added && <span style={{ color: "var(--accent)", marginLeft: 8 }}>added</span>}
+                      </div>
+                      <div style={{ color: "var(--text2)", fontFamily: "monospace", fontSize: 11 }}>{p.path}</div>
+                      {p.note && (
+                        <div style={{ color: "#22C55E", fontSize: 10, marginTop: 2 }}>{p.note}</div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -148,21 +217,26 @@ export default function IndexingPanel({ onClose, onDone }: Props) {
             )}
 
             <button
-              onClick={handleStart}
-              disabled={!directory.trim()}
+              onClick={startQueue}
+              disabled={directories.length === 0}
               style={{
                 width: "100%", background: "var(--accent)", color: "#fff",
                 padding: "10px 0", borderRadius: 8, fontWeight: 600, fontSize: 14,
-                opacity: directory.trim() ? 1 : 0.4,
+                opacity: directories.length > 0 ? 1 : 0.4,
               }}
             >
-              Start Indexing
+              Start Indexing {directories.length > 1 ? `(${directories.length} directories)` : ""}
             </button>
           </>
         ) : (
           /* Progress view */
           <div>
             <div style={{ marginBottom: 12, fontSize: 13, color: "var(--text2)" }}>
+              {queueRef.current.length > 1 && (
+                <div style={{ marginBottom: 4, fontSize: 11 }}>
+                  Directory {queueIndex + 1} of {queueRef.current.length}
+                </div>
+              )}
               Scanning: <span style={{ color: "var(--text)" }}>{status?.directory}</span>
             </div>
 
