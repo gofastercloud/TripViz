@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 import os
 
 from database import init_db
-from routers import photos, trips, indexing
+from routers import photos, trips, indexing, ml, kit
 
 app = FastAPI(title="TripViz", version="1.0.0")
 
@@ -20,6 +20,8 @@ app.add_middleware(
 app.include_router(photos.router)
 app.include_router(trips.router)
 app.include_router(indexing.router)
+app.include_router(ml.router)
+app.include_router(kit.router)
 
 # Serve built frontend if present
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

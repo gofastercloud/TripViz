@@ -3,7 +3,10 @@ import { useState, useEffect, useCallback } from "react";
 import Gallery from "./components/Gallery";
 import MapView from "./components/MapView";
 import TripsView from "./components/TripsView";
+import PeopleView from "./components/PeopleView";
+import KitView from "./components/KitView";
 import IndexingPanel from "./components/IndexingPanel";
+import MLPanel from "./components/MLPanel";
 import type { Trip, Stats } from "./types";
 import { getTrips, getStats } from "./api/client";
 
@@ -11,6 +14,7 @@ export default function App() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [showIndexing, setShowIndexing] = useState(false);
+  const [showML, setShowML] = useState(false);
   const navigate = useNavigate();
 
   const loadTrips = useCallback(async () => {
@@ -26,10 +30,7 @@ export default function App() {
     loadStats();
   }, [loadTrips, loadStats]);
 
-  const handleIndexingDone = () => {
-    loadStats();
-    loadTrips();
-  };
+  const refresh = useCallback(() => { loadTrips(); loadStats(); }, [loadTrips, loadStats]);
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
@@ -43,71 +44,78 @@ export default function App() {
         flexShrink: 0,
       }}>
         {/* Logo */}
-        <div style={{ padding: "20px 16px 12px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "var(--text)" }}>
-            🗺️ TripViz
-          </div>
+        <div style={{ padding: "18px 16px 10px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ fontSize: 19, fontWeight: 700 }}>🗺️ TripViz</div>
           {stats && (
-            <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 3 }}>
               {stats.total_photos.toLocaleString()} photos · {stats.geotagged.toLocaleString()} geotagged
             </div>
           )}
         </div>
 
-        {/* Nav links */}
-        <div style={{ flex: 1, padding: "8px 0" }}>
+        {/* Primary nav */}
+        <div style={{ padding: "6px 0" }}>
           <NavItem to="/" label="Gallery" icon="🖼️" />
           <NavItem to="/map" label="Map" icon="🗺️" />
           <NavItem to="/trips" label="Trips" icon="✈️" />
-
-          {trips.length > 0 && (
-            <div style={{ padding: "12px 16px 4px", fontSize: 11, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Trips
-            </div>
-          )}
-          {trips.map(trip => (
-            <button
-              key={trip.id}
-              onClick={() => navigate(`/trips/${trip.id}`)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                width: "100%",
-                padding: "7px 16px",
-                color: "var(--text2)",
-                fontSize: 13,
-                textAlign: "left",
-              }}
-              onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
-              onMouseLeave={e => (e.currentTarget.style.color = "var(--text2)")}
-            >
-              <span style={{
-                width: 10, height: 10, borderRadius: "50%",
-                background: trip.color, flexShrink: 0,
-              }} />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {trip.name}
-              </span>
-              <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text2)" }}>
-                {trip.photo_count}
-              </span>
-            </button>
-          ))}
+          <NavItem to="/people" label="People" icon="👥" />
+          <NavItem to="/kit" label="Kit List" icon="📷" />
         </div>
 
-        {/* Index button */}
-        <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)" }}>
+        {/* Trip shortcuts */}
+        {trips.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 4 }}>
+            <div style={{ padding: "8px 16px 2px", fontSize: 10, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+              Trips
+            </div>
+            {trips.slice(0, 8).map(trip => (
+              <button
+                key={trip.id}
+                onClick={() => navigate(`/trips/${trip.id}`)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  width: "100%", padding: "5px 16px",
+                  color: "var(--text2)", fontSize: 12, textAlign: "left",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
+                onMouseLeave={e => (e.currentTarget.style.color = "var(--text2)")}
+              >
+                <span style={{
+                  width: 9, height: 9, borderRadius: "50%",
+                  background: trip.color, flexShrink: 0,
+                }} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  {trip.name}
+                </span>
+                <span style={{ fontSize: 10, color: "var(--text2)", flexShrink: 0 }}>
+                  {trip.photo_count}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ flex: 1 }} />
+
+        {/* Action buttons */}
+        <div style={{ padding: "10px 16px 14px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 6 }}>
+          <button
+            onClick={() => setShowML(true)}
+            style={{
+              width: "100%", padding: "7px 12px",
+              borderRadius: "var(--radius)", fontSize: 12, fontWeight: 600,
+              border: "1px solid var(--border)", color: "var(--text2)",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}
+          >
+            🤖 ML Features
+          </button>
           <button
             onClick={() => setShowIndexing(true)}
             style={{
-              width: "100%",
-              background: "var(--accent)",
-              color: "#fff",
-              padding: "8px 12px",
-              borderRadius: "var(--radius)",
-              fontWeight: 600,
-              fontSize: 13,
+              width: "100%", background: "var(--accent)", color: "#fff",
+              padding: "8px 12px", borderRadius: "var(--radius)",
+              fontWeight: 600, fontSize: 13,
             }}
           >
             + Index Photos
@@ -122,12 +130,16 @@ export default function App() {
           <Route path="/map" element={<MapView trips={trips} />} />
           <Route path="/trips" element={<TripsView trips={trips} onTripsChange={loadTrips} />} />
           <Route path="/trips/:tripId" element={<TripsView trips={trips} onTripsChange={loadTrips} />} />
+          <Route path="/people" element={<PeopleView trips={trips} onTripsChange={loadTrips} />} />
+          <Route path="/kit" element={<KitView trips={trips} onTripsChange={loadTrips} />} />
         </Routes>
       </main>
 
-      {/* Indexing modal */}
       {showIndexing && (
-        <IndexingPanel onClose={() => setShowIndexing(false)} onDone={handleIndexingDone} />
+        <IndexingPanel onClose={() => setShowIndexing(false)} onDone={refresh} />
+      )}
+      {showML && (
+        <MLPanel onClose={() => setShowML(false)} onDone={refresh} />
       )}
     </div>
   );
@@ -139,16 +151,13 @@ function NavItem({ to, label, icon }: { to: string; label: string; icon: string 
       to={to}
       end={to === "/"}
       style={({ isActive }) => ({
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "8px 16px",
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "7px 16px",
         color: isActive ? "var(--text)" : "var(--text2)",
         background: isActive ? "var(--bg3)" : "transparent",
         borderLeft: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-        fontSize: 13,
-        fontWeight: isActive ? 600 : 400,
-        transition: "all 0.15s",
+        fontSize: 13, fontWeight: isActive ? 600 : 400,
+        transition: "all 0.12s",
       })}
     >
       <span>{icon}</span>

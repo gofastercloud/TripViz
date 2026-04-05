@@ -242,6 +242,12 @@ export default function Gallery({ trips, onTripChange, onStatsChange }: Props) {
   );
 }
 
+// Detect if a camera make/model string is a phone or a dedicated camera
+function isPhone(make: string | null, model: string | null): boolean {
+  const s = `${make ?? ""} ${model ?? ""}`.toLowerCase();
+  return /apple|iphone|samsung|pixel|oneplus|xiaomi|huawei|oppo|vivo|redmi|galaxy|realme/.test(s);
+}
+
 function PhotoCard({ photo, selected, onSelect, onClick }: {
   photo: Photo;
   selected: boolean;
@@ -249,6 +255,9 @@ function PhotoCard({ photo, selected, onSelect, onClick }: {
   onClick: () => void;
 }) {
   const [imgError, setImgError] = useState(false);
+  const activities = photo.activities ? JSON.parse(photo.activities) as string[] : [];
+  const hasCamera = !!(photo.camera_make || photo.camera_model);
+  const phone = hasCamera && isPhone(photo.camera_make, photo.camera_model);
 
   return (
     <div
@@ -279,15 +288,41 @@ function PhotoCard({ photo, selected, onSelect, onClick }: {
         }}>🖼️</div>
       )}
 
-      {/* Trip color dot */}
-      {photo.trip_color && (
-        <div style={{
-          position: "absolute", bottom: 5, right: 5,
-          width: 10, height: 10, borderRadius: "50%",
-          background: photo.trip_color,
-          border: "1px solid rgba(0,0,0,0.4)",
-        }} title={photo.trip_name ?? ""} />
-      )}
+      {/* Top-right badges */}
+      <div style={{
+        position: "absolute", top: 5, right: 5,
+        display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-end",
+      }}>
+        {photo.latitude != null && (
+          <Badge title="Geotagged" bg="rgba(34,197,94,0.85)">🛰</Badge>
+        )}
+        {hasCamera && (
+          <Badge title={phone ? "Phone camera" : "Dedicated camera"} bg="rgba(0,0,0,0.6)">
+            {phone ? "📱" : "📷"}
+          </Badge>
+        )}
+      </div>
+
+      {/* Bottom: trip dot + activity chips */}
+      <div style={{
+        position: "absolute", bottom: 4, left: 4, right: 4,
+        display: "flex", alignItems: "center", gap: 4,
+      }}>
+        {activities.slice(0, 1).map(a => (
+          <span key={a} style={{
+            background: "rgba(0,0,0,0.65)", color: "#fff",
+            padding: "1px 5px", borderRadius: 8, fontSize: 9,
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            maxWidth: "calc(100% - 20px)",
+          }}>{a}</span>
+        ))}
+        {photo.trip_color && (
+          <div style={{
+            marginLeft: "auto", width: 9, height: 9, borderRadius: "50%",
+            background: photo.trip_color, border: "1px solid rgba(0,0,0,0.4)", flexShrink: 0,
+          }} title={photo.trip_name ?? ""} />
+        )}
+      </div>
 
       {/* Select checkbox */}
       <div
@@ -303,16 +338,16 @@ function PhotoCard({ photo, selected, onSelect, onClick }: {
       >
         {selected && "✓"}
       </div>
-
-      {/* GPS indicator */}
-      {photo.latitude && (
-        <div style={{
-          position: "absolute", top: 5, right: 5,
-          fontSize: 10, background: "rgba(0,0,0,0.5)",
-          borderRadius: 3, padding: "1px 4px", color: "#fff",
-        }}>📍</div>
-      )}
     </div>
+  );
+}
+
+function Badge({ children, title, bg }: { children: React.ReactNode; title: string; bg: string }) {
+  return (
+    <div title={title} style={{
+      background: bg, borderRadius: 3, padding: "1px 4px",
+      fontSize: 10, lineHeight: 1.4, color: "#fff",
+    }}>{children}</div>
   );
 }
 

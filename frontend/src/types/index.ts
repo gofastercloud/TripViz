@@ -13,6 +13,10 @@ export interface Photo {
   trip_id: number | null;
   trip_color: string | null;
   trip_name: string | null;
+  // ML
+  activities: string | null;   // JSON-encoded string[] e.g. '["beach","hiking"]'
+  face_analyzed: boolean;
+  activity_analyzed: boolean;
 }
 
 export interface MapPin {
@@ -57,6 +61,55 @@ export interface IndexStatus {
   errors: number;
   current_file: string;
   directory: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+// ── ML types ────────────────────────────────────────────────
+
+export interface MLCapabilities {
+  platform: string;
+  arch: string;
+  ram_gb: number;
+  cpu_count: number;
+  has_cuda: boolean;
+  has_mps: boolean;
+  mediapipe_available: boolean;
+  sklearn_available: boolean;
+  transformers_available: boolean;
+  torch_available: boolean;
+  face_models_downloaded: Record<string, boolean>;
+  face_detection_ready: boolean;
+  activity_detection_ready: boolean;
+  recommended_device: string;
+}
+
+export interface FaceBox {
+  id: number;
+  photo_id: number;
+  bbox_x: number;
+  bbox_y: number;
+  bbox_w: number;
+  bbox_h: number;
+  confidence: number;
+  person_id: number | null;
+  person_name: string | null;
+}
+
+export interface Person {
+  id: number;
+  name: string;
+  face_count: number;
+  cover_face: FaceBox | null;
+}
+
+export interface BatchAnalysisStatus {
+  running: boolean;
+  task: string;
+  total: number;
+  processed: number;
+  errors: number;
+  current: string;
   started_at: string | null;
   finished_at: string | null;
 }

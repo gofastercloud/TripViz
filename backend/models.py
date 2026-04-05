@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Boolean
+from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Boolean, LargeBinary, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -11,10 +11,39 @@ class Trip(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    color: Mapped[str] = mapped_column(String(7), default="#3B82F6")  # hex color
+    color: Mapped[str] = mapped_column(String(7), default="#3B82F6")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     photos: Mapped[list["Photo"]] = relationship("Photo", back_populates="trip")
+
+
+class Person(Base):
+    __tablename__ = "people"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    faces: Mapped[list["Face"]] = relationship("Face", back_populates="person")
+
+
+class Face(Base):
+    __tablename__ = "faces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    photo_id: Mapped[int] = mapped_column(Integer, ForeignKey("photos.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Normalized bounding box (0.0 – 1.0 relative to image dimensions)
+    bbox_x: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox_y: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox_w: Mapped[float] = mapped_column(Float, nullable=False)
+    bbox_h: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    # 128-dim float32 embedding serialized as raw bytes (512 bytes)
+    embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    person_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("people.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    photo: Mapped["Photo"] = relationship("Photo", back_populates="faces")
+    person: Mapped[Optional[Person]] = relationship("Person", back_populates="faces")
 
 
 class Photo(Base):
@@ -35,5 +64,10 @@ class Photo(Base):
     orientation: Mapped[int] = mapped_column(Integer, default=1)
     has_thumbnail: Mapped[bool] = mapped_column(Boolean, default=False)
     trip_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+    # ML analysis
+    activities: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list of strings
+    face_analyzed: Mapped[bool] = mapped_column(Boolean, default=False)
+    activity_analyzed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     trip: Mapped[Optional[Trip]] = relationship("Trip", back_populates="photos")
+    faces: Mapped[list[Face]] = relationship("Face", back_populates="photo", cascade="all, delete-orphan")
