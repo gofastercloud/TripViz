@@ -1,0 +1,12 @@
+# ML features: face detection, face recognition, activity tagging
+# Install with: pip install -r requirements-ml.txt
+#
+# Note: torch install varies by platform — see https://pytorch.org/get-started/locally/
+# For Apple Silicon (M-series): pip install torch torchvision  (MPS is built-in)
+# For CUDA on Windows/Linux:    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+mediapipe>=0.10.14
+scikit-learn>=1.3.0
+transformers>=4.40.0
+torch>=2.0.0
+psutil>=5.9.0
