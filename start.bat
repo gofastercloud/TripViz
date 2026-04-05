@@ -53,7 +53,7 @@ if not exist "%FRONTEND_DIR%\dist\index.html" (
 
 :: ---- Start backend ----
 echo [Start] Starting TripViz server...
-start "TripViz Backend" /B cmd /c "cd /d "%BACKEND_DIR%" && "%VENV_DIR%\Scripts\python.exe" main.py > tripviz.log 2>&1"
+start "TripViz Backend" /B cmd /c "cd /d "%BACKEND_DIR%" && "%VENV_DIR%\Scripts\python.exe" main.py >> "%SCRIPT_DIR%tripviz.log" 2>&1"
 
 :: ---- Wait for server ----
 echo [Wait] Waiting for server to start...

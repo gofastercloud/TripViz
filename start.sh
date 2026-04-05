@@ -66,7 +66,7 @@ trap cleanup EXIT INT TERM
 # ---- Start backend ----
 echo "[Start] Starting TripViz server on http://127.0.0.1:$PORT ..."
 cd "$BACKEND_DIR"
-python main.py &
+"$VENV_DIR/bin/python" main.py &
 BACKEND_PID=$!
 cd "$SCRIPT_DIR"
 
