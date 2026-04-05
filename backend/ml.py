@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Optional
 
 # Where mediapipe .tflite models are stored
-MODELS_DIR = Path(__file__).parent / "ml_models"
+_data_dir = os.environ.get("TRIPVIZ_DATA_DIR", str(Path(__file__).parent))
+MODELS_DIR = Path(_data_dir) / "ml_models"
 MODELS_DIR.mkdir(exist_ok=True)
 
 MEDIAPIPE_MODELS = {
@@ -33,9 +34,9 @@ MEDIAPIPE_MODELS = {
         "blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
     ),
     "face_embedder": (
-        "face_embedder.tflite",
-        "https://storage.googleapis.com/mediapipe-models/face_embedder/"
-        "face_embedder/float16/1/face_embedder.tflite",
+        "mobilenet_v3_small.tflite",
+        "https://storage.googleapis.com/mediapipe-models/image_embedder/"
+        "mobilenet_v3_small/float32/1/mobilenet_v3_small.tflite",
     ),
 }
 
@@ -81,7 +82,9 @@ _batch_lock = threading.Lock()
 #  Capability detection
 # ──────────────────────────────────────────────────────────
 
-def detect_capabilities() -> dict:
+def detect_capabilities(_cache: dict[str, dict] = {"v": None}) -> dict:  # type: ignore[assignment]
+    if _cache["v"] is not None:
+        return _cache["v"]
     caps: dict = {
         "platform": platform.system(),
         "arch": platform.machine(),
@@ -146,6 +149,7 @@ def detect_capabilities() -> dict:
         and caps["ram_gb"] >= 4.0
     )
 
+    _cache["v"] = caps
     return caps
 
 

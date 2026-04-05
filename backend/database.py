@@ -2,7 +2,8 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "tripviz.db")
+_data_dir = os.environ.get("TRIPVIZ_DATA_DIR", os.path.dirname(__file__))
+DB_PATH = os.path.join(_data_dir, "tripviz.db")
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -33,6 +34,10 @@ def _migrate(conn):
     _add_column_if_missing(conn, "photos", "activities", "TEXT")
     _add_column_if_missing(conn, "photos", "face_analyzed", "BOOLEAN DEFAULT 0")
     _add_column_if_missing(conn, "photos", "activity_analyzed", "BOOLEAN DEFAULT 0")
+    # Notes, location tags, lens info
+    _add_column_if_missing(conn, "photos", "lens_model", "VARCHAR(256)")
+    _add_column_if_missing(conn, "photos", "notes", "VARCHAR(250)")
+    _add_column_if_missing(conn, "photos", "tags", "TEXT")
 
 
 def init_db():

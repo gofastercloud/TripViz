@@ -130,6 +130,7 @@ def _interpolate_position(
 def detect_trips(
     gap_hours: float = Query(6.0, ge=1.0, le=48.0, description="Hours of inactivity that splits trips"),
     min_photos: int = Query(3, ge=1),
+    min_gps_pct: float = Query(25.0, ge=0, le=100, description="Minimum % of photos with GPS to qualify as a trip"),
     geocode: bool = Query(True, description="Reverse-geocode centroids (may be slow)"),
     db: Session = Depends(get_db),
 ):
@@ -137,27 +138,27 @@ def detect_trips(
     Cluster all dated photos into trip candidates using time-gap analysis.
     Photos without GPS are included in clusters based on time proximity.
     """
-    photos = (
-        db.query(Photo)
+    rows = (
+        db.query(Photo.id, Photo.date_taken, Photo.latitude, Photo.longitude, Photo.trip_id, Photo.tags)
         .filter(Photo.date_taken.isnot(None))
         .order_by(asc(Photo.date_taken))
         .all()
     )
 
-    if not photos:
+    if not rows:
         return {"trips": [], "total": 0}
 
     # ── Time-gap clustering ──────────────────────────────
-    clusters: list[list[Photo]] = []
-    current: list[Photo] = [photos[0]]
+    clusters: list[list] = []
+    current: list = [rows[0]]
 
-    for photo in photos[1:]:
-        gap = (photo.date_taken - current[-1].date_taken).total_seconds()
+    for row in rows[1:]:
+        gap = (row.date_taken - current[-1].date_taken).total_seconds()
         if gap > gap_hours * 3600:
             clusters.append(current)
-            current = [photo]
+            current = [row]
         else:
-            current.append(photo)
+            current.append(row)
     clusters.append(current)
 
     # ── Build suggestions ────────────────────────────────
@@ -167,6 +168,9 @@ def detect_trips(
             continue
 
         gps_photos = [p for p in cluster if p.latitude is not None and p.longitude is not None]
+        gps_pct = (len(gps_photos) / len(cluster)) * 100
+        if gps_pct < min_gps_pct:
+            continue
         dates = [p.date_taken for p in cluster]
         start_dt = min(dates)
         end_dt = max(dates)
@@ -177,9 +181,33 @@ def detect_trips(
             centroid_lat = sum(p.latitude for p in gps_photos) / len(gps_photos)
             centroid_lon = sum(p.longitude for p in gps_photos) / len(gps_photos)
 
-        # Reverse geocode
+        # Derive location from stored photo tags (most common city/town)
         location_name = "Unknown location"
-        if geocode and centroid_lat is not None:
+        tag_counts: dict[str, int] = {}
+        for p in cluster:
+            if p.tags:
+                try:
+                    for tag in json.loads(p.tags):
+                        tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                except Exception:
+                    pass
+
+        if tag_counts:
+            # Tags are ordered: city, county, state, country — pick the most
+            # frequent tag that isn't a country (last in the list) for the city,
+            # and the least frequent for the country context
+            sorted_tags = sorted(tag_counts.items(), key=lambda x: -x[1])
+            # Use the most common tag as the primary location
+            primary = sorted_tags[0][0]
+            # Find a broader context (country is usually the least specific / last tag)
+            # Look for a different tag to use as context
+            context = ""
+            if len(sorted_tags) > 1:
+                context = sorted_tags[-1][0]
+            location_name = f"{primary}, {context}" if context and context != primary else primary
+
+        # Fall back to live geocoding if no tags and geocode=true
+        if location_name == "Unknown location" and geocode and centroid_lat is not None:
             location_name = reverse_geocode(centroid_lat, centroid_lon)
 
         # How many photos are already in a trip?
@@ -192,6 +220,14 @@ def detect_trips(
 
         # Duration
         duration_hours = (end_dt - start_dt).total_seconds() / 3600
+
+        # Preview pins for map (up to 200 GPS points)
+        preview_pins = [
+            {"id": p.id, "lat": p.latitude, "lon": p.longitude}
+            for p in gps_photos[:200]
+        ]
+        # Sample photo IDs for thumbnail preview (first 8)
+        preview_photo_ids = [p.id for p in cluster[:8]]
 
         suggestions.append({
             "cluster_id": len(suggestions),
@@ -208,6 +244,8 @@ def detect_trips(
             "already_assigned": already_assigned,
             "existing_trip_ids": existing_trip_ids,
             "photo_ids": [p.id for p in cluster],
+            "preview_pins": preview_pins,
+            "preview_photo_ids": preview_photo_ids,
         })
 
     return {"trips": suggestions, "total": len(suggestions)}

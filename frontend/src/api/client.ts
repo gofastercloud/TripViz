@@ -9,7 +9,9 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(BASE + url, options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? "Request failed");
+    const detail = err.detail;
+    const msg = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join("; ") : "Request failed";
+    throw new Error(msg);
   }
   return res.json();
 }
@@ -25,6 +27,8 @@ export const getPhotos = (params: Record<string, string | number | boolean | und
 
 export const getPhoto = (id: number) => request<Photo>(`/photos/${id}`);
 
+export const getPhotoExif = (id: number) => request<Record<string, unknown>>(`/photos/${id}/exif`);
+
 export const getMapPins = (tripId?: number) => {
   const p = tripId != null ? `?trip_id=${tripId}` : "";
   return request<MapPin[]>(`/photos/map-pins${p}`);
@@ -36,6 +40,25 @@ export const assignTrip = (photoId: number, tripId: number | null) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trip_id: tripId }),
   });
+
+export const updateNotes = (photoId: number, notes: string | null) =>
+  request<Photo>(`/photos/${photoId}/notes`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes }),
+  });
+
+export const searchPhotos = (q: string, page = 1, perPage = 50) =>
+  request<PhotosResponse>(`/photos/search/query?q=${encodeURIComponent(q)}&page=${page}&per_page=${perPage}`);
+
+export interface SearchSuggestion {
+  label: string;
+  count: number;
+  category: "location" | "person" | "trip";
+}
+
+export const searchSuggest = (q: string) =>
+  request<SearchSuggestion[]>(`/photos/search/suggest?q=${encodeURIComponent(q)}`);
 
 export const bulkAssignTrip = (photoIds: number[], tripId: number | null) =>
   request<{ updated: number }>(`/photos/bulk-assign-trip`, {
@@ -152,9 +175,9 @@ export const getPhotoFaces = (photoId: number) =>
 // ── Trip Detection & Replay ───────────────────────────────────────
 import type { DetectedTrip, ReplayData } from "../types";
 
-export const detectTrips = (gapHours = 6, minPhotos = 3, geocode = true) =>
+export const detectTrips = (gapHours = 6, minPhotos = 3, geocode = false, minGpsPct = 25) =>
   request<{ trips: DetectedTrip[]; total: number }>(
-    `/detect/trips?gap_hours=${gapHours}&min_photos=${minPhotos}&geocode=${geocode}`,
+    `/detect/trips?gap_hours=${gapHours}&min_photos=${minPhotos}&min_gps_pct=${minGpsPct}&geocode=${geocode}`,
   );
 
 export const getTripReplay = (tripId: number, interpolationWindowHours = 2) =>
@@ -169,11 +192,20 @@ export interface KitDevice {
   display_name: string;
   photo_count: number;
   type: "camera" | "phone";
+  search_url: string;
+}
+
+export interface KitLens {
+  lens_model: string;
+  display_name: string;
+  photo_count: number;
+  search_url: string;
 }
 
 export interface KitData {
   cameras: KitDevice[];
   phones: KitDevice[];
+  lenses: KitLens[];
   no_camera_info: number;
   total_devices: number;
 }

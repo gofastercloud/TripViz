@@ -3,6 +3,7 @@ import L from "leaflet";
 import "leaflet.markercluster";
 import type { MapPin, Trip } from "../types";
 import { getMapPins, thumbnailUrl } from "../api/client";
+import PhotoLightbox from "./PhotoLightbox";
 
 interface Props {
   trips: Trip[];
@@ -47,17 +48,41 @@ function createColoredIcon(color: string) {
   });
 }
 
+type TileStyle = "road" | "satellite" | "topo";
+
+const TILE_LAYERS: Record<TileStyle, { url: string; attribution: string; maxZoom: number }> = {
+  road: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>',
+    maxZoom: 19,
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+    maxZoom: 18,
+  },
+  topo: {
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
+    maxZoom: 17,
+  },
+};
+
 export default function MapView({ trips }: Props) {
   const mapRef = useRef<L.Map | null>(null);
   const mapDivRef = useRef<HTMLDivElement>(null);
   const clusterRef = useRef<L.MarkerClusterGroup | null>(null);
   const hullLayersRef = useRef<L.Polygon[]>([]);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
 
   const [pins, setPins] = useState<MapPin[]>([]);
   const [selectedTrip, setSelectedTrip] = useState<string>("all");
   const [showHulls, setShowHulls] = useState(true);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ total: 0, geotagged: 0 });
+  const [tileStyle, setTileStyle] = useState<TileStyle>("road");
+  const [lightboxId, setLightboxId] = useState<number | null>(null);
+  const pinIdsRef = useRef<number[]>([]);
 
   // Init map
   useEffect(() => {
@@ -69,10 +94,11 @@ export default function MapView({ trips }: Props) {
       zoomControl: true,
     });
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
-      maxZoom: 19,
+    const layer = L.tileLayer(TILE_LAYERS.road.url, {
+      attribution: TILE_LAYERS.road.attribution,
+      maxZoom: TILE_LAYERS.road.maxZoom,
     }).addTo(map);
+    tileLayerRef.current = layer;
 
     mapRef.current = map;
     return () => {
@@ -80,6 +106,28 @@ export default function MapView({ trips }: Props) {
       mapRef.current = null;
     };
   }, []);
+
+  // Global click handler for popup "View" buttons
+  const lightboxIdSetRef = useRef(setLightboxId);
+  lightboxIdSetRef.current = setLightboxId;
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest("[data-photo-id]") as HTMLElement | null;
+      if (btn) lightboxIdSetRef.current(Number(btn.dataset.photoId));
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, []);
+
+  // Switch tile layer
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (tileLayerRef.current) map.removeLayer(tileLayerRef.current);
+    const cfg = TILE_LAYERS[tileStyle];
+    const layer = L.tileLayer(cfg.url, { attribution: cfg.attribution, maxZoom: cfg.maxZoom }).addTo(map);
+    tileLayerRef.current = layer;
+  }, [tileStyle]);
 
   const loadPins = useCallback(async () => {
     if (!mapRef.current) return;
@@ -126,6 +174,8 @@ export default function MapView({ trips }: Props) {
       },
     });
 
+    pinIdsRef.current = data.flatMap(p => p.photo_ids);
+
     for (const pin of data) {
       const color = pin.trip_color ?? "#3B82F6";
       const icon = createColoredIcon(color);
@@ -133,15 +183,18 @@ export default function MapView({ trips }: Props) {
 
       const dateStr = pin.date ? new Date(pin.date).toLocaleDateString() : "Unknown date";
       const tripStr = pin.trip_name ? `<div style="color:#aaa;font-size:11px">${pin.trip_name}</div>` : "";
+      const countStr = pin.count > 1 ? `<div style="font-size:11px;color:#aaa;margin-bottom:4px">${pin.count} photos</div>` : "";
 
       marker.bindPopup(`
-        <div style="text-align:center;min-width:160px">
-          <img src="${thumbnailUrl(pin.id)}"
+        <div style="text-align:center;min-width:160px;cursor:pointer" data-photo-id="${pin.photo_ids[0]}">
+          <img src="${thumbnailUrl(pin.photo_ids[0])}"
             style="width:150px;height:100px;object-fit:cover;border-radius:4px;display:block;margin:0 auto 6px"
             onerror="this.style.display='none'"
           />
+          ${countStr}
           <div style="font-size:12px;color:#ccc">${dateStr}</div>
           ${tripStr}
+          <div style="margin-top:4px;font-size:11px;color:#3B82F6">View photo →</div>
         </div>
       `, { maxWidth: 200 });
 
@@ -194,7 +247,7 @@ export default function MapView({ trips }: Props) {
       const polygon = L.polygon(latlngs, {
         color,
         fillColor: color,
-        fillOpacity: 0.08,
+        fillOpacity: 0.25,
         weight: 2,
         opacity: 0.5,
         dashArray: "6 4",
@@ -216,8 +269,25 @@ export default function MapView({ trips }: Props) {
           {loading ? "Loading..." : `${stats.geotagged.toLocaleString()} geotagged photos`}
         </span>
 
+        <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+          {(["road", "satellite", "topo"] as TileStyle[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setTileStyle(t)}
+              style={{
+                padding: "4px 10px", borderRadius: 4, fontSize: 11, fontWeight: 500,
+                background: tileStyle === t ? "var(--accent)" : "var(--bg3)",
+                color: tileStyle === t ? "#fff" : "var(--text2)",
+                border: `1px solid ${tileStyle === t ? "var(--accent)" : "var(--border)"}`,
+              }}
+            >
+              {t === "topo" ? "Topo" : t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+
         <select value={selectedTrip} onChange={e => setSelectedTrip(e.target.value)}
-          style={{ fontSize: 12, marginLeft: "auto" }}>
+          style={{ fontSize: 12 }}>
           <option value="all">All trips</option>
           {trips.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
@@ -250,6 +320,26 @@ export default function MapView({ trips }: Props) {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Photo lightbox */}
+      {lightboxId !== null && (
+        <PhotoLightbox
+          photoId={lightboxId}
+          trips={trips}
+          onClose={() => setLightboxId(null)}
+          onTripChange={() => loadPins()}
+          onNext={() => {
+            const ids = pinIdsRef.current;
+            const idx = ids.indexOf(lightboxId);
+            if (idx >= 0 && idx < ids.length - 1) setLightboxId(ids[idx + 1]);
+          }}
+          onPrev={() => {
+            const ids = pinIdsRef.current;
+            const idx = ids.indexOf(lightboxId);
+            if (idx > 0) setLightboxId(ids[idx - 1]);
+          }}
+        />
       )}
     </div>
   );

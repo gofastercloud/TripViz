@@ -26,7 +26,8 @@ app.include_router(detect.router)
 app.include_router(editing.router)
 
 # Serve built frontend if present
-FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+_bundle_dir = os.environ.get("TRIPVIZ_BUNDLE_DIR", os.path.join(os.path.dirname(__file__), ".."))
+FRONTEND_DIST = os.path.join(_bundle_dir, "frontend", "dist")
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
@@ -50,6 +51,12 @@ def on_startup():
     # Ensure thumbnails dir exists
     from indexer import THUMBNAIL_DIR
     os.makedirs(THUMBNAIL_DIR, exist_ok=True)
+    # Register HEIC/HEIF support if pillow-heif is installed
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
 
 
 if __name__ == "__main__":

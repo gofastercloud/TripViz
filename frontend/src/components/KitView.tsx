@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getKit, getPhotos, thumbnailUrl, type KitDevice } from "../api/client";
+import { getKit, getPhotos, thumbnailUrl, type KitDevice, type KitLens } from "../api/client";
 import type { Photo } from "../types";
 import PhotoLightbox from "./PhotoLightbox";
 import type { Trip } from "../types";
@@ -9,15 +9,19 @@ interface Props {
   onTripsChange: () => void;
 }
 
+type SelectedItem =
+  | { kind: "device"; device: KitDevice }
+  | { kind: "lens"; lens: KitLens };
+
 export default function KitView({ trips, onTripsChange }: Props) {
   const [cameras, setCameras] = useState<KitDevice[]>([]);
   const [phones, setPhones] = useState<KitDevice[]>([]);
+  const [lenses, setLenses] = useState<KitLens[]>([]);
   const [noCameraCount, setNoCameraCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<KitDevice | null>(null);
+  const [selected, setSelected] = useState<SelectedItem | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [photoTotal, setPhotoTotal] = useState(0);
-  const [photoPage, setPhotoPage] = useState(1);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [lightboxId, setLightboxId] = useState<number | null>(null);
 
@@ -25,38 +29,48 @@ export default function KitView({ trips, onTripsChange }: Props) {
     getKit().then(data => {
       setCameras(data.cameras);
       setPhones(data.phones);
+      setLenses(data.lenses);
       setNoCameraCount(data.no_camera_info);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
 
-  const loadPhotosForDevice = async (device: KitDevice, page: number, reset: boolean) => {
+  const loadPhotos = async (item: SelectedItem, page: number, reset: boolean) => {
     setLoadingPhotos(true);
     try {
-      // Build a search by camera_make+model — use the combined name as a proxy filter.
-      // We fetch all photos and filter by make/model client-side since the API doesn't
-      // expose a camera filter directly. For large libraries we pass the make as a hint.
       const params: Record<string, string | number> = {
         page, per_page: 60, sort: "date_desc",
       };
-      // We can't filter by camera in the current API, so fetch all and filter locally
-      // TODO: add camera_make/camera_model filter to the photos API
+      if (item.kind === "device") {
+        if (item.device.make) params.camera_make = item.device.make;
+        if (item.device.model) params.camera_model = item.device.model;
+      } else {
+        params.lens_model = item.lens.lens_model;
+      }
       const res = await getPhotos(params);
-      const filtered = res.photos.filter(p =>
-        (p.camera_make ?? "") === (device.make ?? "") &&
-        (p.camera_model ?? "") === (device.model ?? "")
-      );
-      setPhotoTotal(device.photo_count);
-      setPhotos(prev => reset ? filtered : [...prev, ...filtered]);
+      setPhotoTotal(res.total);
+      setPhotos(prev => reset ? res.photos : [...prev, ...res.photos]);
     } catch {}
     setLoadingPhotos(false);
   };
 
-  const selectDevice = (device: KitDevice) => {
-    setSelected(device);
-    setPhotoPage(1);
-    loadPhotosForDevice(device, 1, true);
+  const selectItem = (item: SelectedItem) => {
+    setSelected(item);
+    loadPhotos(item, 1, true);
   };
+
+  const selectedName = selected
+    ? selected.kind === "device" ? selected.device.display_name : selected.lens.display_name
+    : "";
+  const selectedCount = selected
+    ? selected.kind === "device" ? selected.device.photo_count : selected.lens.photo_count
+    : 0;
+  const selectedUrl = selected
+    ? selected.kind === "device" ? selected.device.search_url : selected.lens.search_url
+    : "";
+  const selectedIcon = selected
+    ? selected.kind === "lens" ? "🔎" : selected.kind === "device" && selected.device.type === "phone" ? "📱" : "📷"
+    : "";
 
   const totalDevices = cameras.length + phones.length;
 
@@ -72,7 +86,7 @@ export default function KitView({ trips, onTripsChange }: Props) {
           <div style={{ fontWeight: 600 }}>Kit List</div>
           {!loading && (
             <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>
-              {totalDevices} device{totalDevices !== 1 ? "s" : ""} detected from EXIF
+              {totalDevices} device{totalDevices !== 1 ? "s" : ""} · {lenses.length} lens{lenses.length !== 1 ? "es" : ""}
             </div>
           )}
         </div>
@@ -80,7 +94,7 @@ export default function KitView({ trips, onTripsChange }: Props) {
         <div style={{ flex: 1, overflowY: "auto" }}>
           {loading ? (
             <div style={{ padding: 24, color: "var(--text2)", textAlign: "center" }}>Loading…</div>
-          ) : totalDevices === 0 ? (
+          ) : totalDevices === 0 && lenses.length === 0 ? (
             <div style={{ padding: 24, color: "var(--text2)", textAlign: "center", fontSize: 13 }}>
               No camera information found.<br />
               Index some photos to populate your kit list.
@@ -88,10 +102,27 @@ export default function KitView({ trips, onTripsChange }: Props) {
           ) : (
             <>
               {cameras.length > 0 && (
-                <DeviceSection title="Cameras 📷" devices={cameras} selected={selected} onSelect={selectDevice} />
+                <DeviceSection
+                  title="Cameras 📷"
+                  devices={cameras}
+                  isSelected={d => selected?.kind === "device" && selected.device.display_name === d.display_name}
+                  onSelect={d => selectItem({ kind: "device", device: d })}
+                />
+              )}
+              {lenses.length > 0 && (
+                <LensSection
+                  lenses={lenses}
+                  isSelected={l => selected?.kind === "lens" && selected.lens.lens_model === l.lens_model}
+                  onSelect={l => selectItem({ kind: "lens", lens: l })}
+                />
               )}
               {phones.length > 0 && (
-                <DeviceSection title="Phones 📱" devices={phones} selected={selected} onSelect={selectDevice} />
+                <DeviceSection
+                  title="Phones 📱"
+                  devices={phones}
+                  isSelected={d => selected?.kind === "device" && selected.device.display_name === d.display_name && selected.device.type === d.type}
+                  onSelect={d => selectItem({ kind: "device", device: d })}
+                />
               )}
               {noCameraCount > 0 && (
                 <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text2)", borderTop: "1px solid var(--border)" }}>
@@ -107,23 +138,33 @@ export default function KitView({ trips, onTripsChange }: Props) {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {selected ? (
           <>
-            {/* Header */}
             <div style={{
               padding: "14px 20px", background: "var(--bg2)",
               borderBottom: "1px solid var(--border)", flexShrink: 0,
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 20 }}>{selected.type === "phone" ? "📱" : "📷"}</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}>{selected.display_name}</div>
+                <span style={{ fontSize: 20 }}>{selectedIcon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>{selectedName}</div>
                   <div style={{ color: "var(--text2)", fontSize: 13 }}>
-                    {selected.photo_count.toLocaleString()} photo{selected.photo_count !== 1 ? "s" : ""} · {selected.type}
+                    {selectedCount.toLocaleString()} photo{selectedCount !== 1 ? "s" : ""}
                   </div>
                 </div>
+                <a
+                  href={selectedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    fontSize: 12, color: "var(--accent)",
+                    padding: "5px 12px", borderRadius: 6,
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  Specs ↗
+                </a>
               </div>
             </div>
 
-            {/* Photos grid */}
             <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
               {photos.length === 0 && !loadingPhotos ? (
                 <div style={{ color: "var(--text2)", textAlign: "center", paddingTop: 40 }}>
@@ -149,7 +190,7 @@ export default function KitView({ trips, onTripsChange }: Props) {
             justifyContent: "center", height: "100%", color: "var(--text2)", gap: 12,
           }}>
             <div style={{ fontSize: 40 }}>📷</div>
-            <div style={{ fontSize: 15 }}>Select a device to browse its photos</div>
+            <div style={{ fontSize: 15 }}>Select a device or lens to browse its photos</div>
           </div>
         )}
       </div>
@@ -176,10 +217,10 @@ export default function KitView({ trips, onTripsChange }: Props) {
   );
 }
 
-function DeviceSection({ title, devices, selected, onSelect }: {
+function DeviceSection({ title, devices, isSelected, onSelect }: {
   title: string;
   devices: KitDevice[];
-  selected: KitDevice | null;
+  isSelected: (d: KitDevice) => boolean;
   onSelect: (d: KitDevice) => void;
 }) {
   return (
@@ -192,7 +233,7 @@ function DeviceSection({ title, devices, selected, onSelect }: {
         {title}
       </div>
       {devices.map(d => {
-        const isSelected = selected?.display_name === d.display_name && selected?.type === d.type;
+        const active = isSelected(d);
         return (
           <button
             key={`${d.make}|${d.model}`}
@@ -200,12 +241,12 @@ function DeviceSection({ title, devices, selected, onSelect }: {
             style={{
               display: "flex", alignItems: "center", width: "100%",
               padding: "10px 16px", gap: 10, textAlign: "left",
-              background: isSelected ? "var(--bg3)" : "transparent",
-              borderLeft: isSelected ? "2px solid var(--accent)" : "2px solid transparent",
+              background: active ? "var(--bg3)" : "transparent",
+              borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
               borderBottom: "1px solid var(--border)",
             }}
-            onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = "var(--bg3)"; }}
-            onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--bg3)"; }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
           >
             <div style={{ flex: 1, overflow: "hidden" }}>
               <div style={{
@@ -218,15 +259,72 @@ function DeviceSection({ title, devices, selected, onSelect }: {
                 {d.photo_count.toLocaleString()} photos
               </div>
             </div>
-            {/* Simple bar proportional to photo count */}
             <div style={{
               width: 40, height: 4, borderRadius: 2, background: "var(--border)",
               flexShrink: 0, overflow: "hidden",
             }}>
               <div style={{
                 height: "100%",
-                background: isSelected ? "var(--accent)" : "var(--text2)",
+                background: active ? "var(--accent)" : "var(--text2)",
                 width: `${Math.min(100, (d.photo_count / (devices[0]?.photo_count || 1)) * 100)}%`,
+              }} />
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LensSection({ lenses, isSelected, onSelect }: {
+  lenses: KitLens[];
+  isSelected: (l: KitLens) => boolean;
+  onSelect: (l: KitLens) => void;
+}) {
+  return (
+    <div>
+      <div style={{
+        padding: "8px 16px 4px", fontSize: 11, color: "var(--text2)",
+        textTransform: "uppercase", letterSpacing: "0.06em",
+        borderBottom: "1px solid var(--border)",
+      }}>
+        Lenses 🔎
+      </div>
+      {lenses.map(l => {
+        const active = isSelected(l);
+        return (
+          <button
+            key={l.lens_model}
+            onClick={() => onSelect(l)}
+            style={{
+              display: "flex", alignItems: "center", width: "100%",
+              padding: "10px 16px", gap: 10, textAlign: "left",
+              background: active ? "var(--bg3)" : "transparent",
+              borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
+              borderBottom: "1px solid var(--border)",
+            }}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--bg3)"; }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+          >
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <div style={{
+                fontSize: 13, fontWeight: 500,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                {l.display_name}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text2)" }}>
+                {l.photo_count.toLocaleString()} photos
+              </div>
+            </div>
+            <div style={{
+              width: 40, height: 4, borderRadius: 2, background: "var(--border)",
+              flexShrink: 0, overflow: "hidden",
+            }}>
+              <div style={{
+                height: "100%",
+                background: active ? "var(--accent)" : "var(--text2)",
+                width: `${Math.min(100, (l.photo_count / (lenses[0]?.photo_count || 1)) * 100)}%`,
               }} />
             </div>
           </button>

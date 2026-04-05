@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import L from "leaflet";
 import type { DetectedTrip, Trip } from "../types";
-import { detectTrips, createTrip, bulkAssignTrip } from "../api/client";
+import { detectTrips, createTrip, bulkAssignTrip, thumbnailUrl } from "../api/client";
 
 interface Props {
   trips: Trip[];
@@ -17,7 +18,8 @@ export default function TripDetector({ trips, onClose, onTripsCreated }: Props) 
   const [suggestions, setSuggestions] = useState<DetectedTrip[]>([]);
   const [loading, setLoading] = useState(false);
   const [gapHours, setGapHours] = useState(6);
-  const [minPhotos, setMinPhotos] = useState(3);
+  const [minPhotos, setMinPhotos] = useState(5);
+  const [minGpsPct, setMinGpsPct] = useState(25);
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
   const [names, setNames] = useState<Record<number, string>>({});
@@ -25,13 +27,13 @@ export default function TripDetector({ trips, onClose, onTripsCreated }: Props) 
   const [creating, setCreating] = useState(false);
   const [createdCount, setCreatedCount] = useState(0);
 
-  const load = async (geocode = true) => {
+  const load = async (geocode = false) => {
     setLoading(true);
     setSuggestions([]);
     setDismissed(new Set());
     setAccepted(new Set());
     try {
-      const res = await detectTrips(gapHours, minPhotos, geocode);
+      const res = await detectTrips(gapHours, minPhotos, geocode, minGpsPct);
       setSuggestions(res.trips);
       // Pre-fill names and colors
       const ns: Record<number, string> = {};
@@ -125,8 +127,9 @@ export default function TripDetector({ trips, onClose, onTripsCreated }: Props) 
           display: "flex", gap: 16, padding: "12px 20px",
           borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap",
         }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            <span style={{ color: "var(--text2)" }}>Gap between trips</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}
+            title="Hours of inactivity between photos before starting a new trip. Lower values split trips more aggressively.">
+            <span style={{ color: "var(--text2)", cursor: "help", borderBottom: "1px dotted var(--text2)" }}>Gap between trips</span>
             <select value={gapHours} onChange={e => setGapHours(Number(e.target.value))}
               style={{ fontSize: 12 }}>
               {[2,4,6,8,12,24].map(h => (
@@ -134,17 +137,28 @@ export default function TripDetector({ trips, onClose, onTripsCreated }: Props) 
               ))}
             </select>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            <span style={{ color: "var(--text2)" }}>Min photos</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}
+            title="Minimum number of photos required to count as a trip. Clusters with fewer photos are ignored.">
+            <span style={{ color: "var(--text2)", cursor: "help", borderBottom: "1px dotted var(--text2)" }}>Min photos</span>
             <select value={minPhotos} onChange={e => setMinPhotos(Number(e.target.value))}
               style={{ fontSize: 12 }}>
-              {[1,2,3,5,10].map(n => (
+              {[5,10,25,50].map(n => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
           </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}
+            title="Minimum percentage of photos in a cluster that must have GPS coordinates. Filters out groups of screenshots and downloads.">
+            <span style={{ color: "var(--text2)", cursor: "help", borderBottom: "1px dotted var(--text2)" }}>Min GPS</span>
+            <select value={minGpsPct} onChange={e => setMinGpsPct(Number(e.target.value))}
+              style={{ fontSize: 12 }}>
+              {[0,10,25,50,75].map(n => (
+                <option key={n} value={n}>{n}%</option>
+              ))}
+            </select>
+          </label>
           <button
-            onClick={() => load(true)}
+            onClick={() => load()}
             disabled={loading}
             style={{
               marginLeft: "auto", padding: "5px 14px", borderRadius: 6,
@@ -160,7 +174,7 @@ export default function TripDetector({ trips, onClose, onTripsCreated }: Props) 
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 20px" }}>
           {loading && (
             <div style={{ color: "var(--text2)", textAlign: "center", padding: 32, fontSize: 13 }}>
-              Scanning library and reverse-geocoding locations…
+              Scanning library for trip candidates…
             </div>
           )}
 
@@ -256,6 +270,7 @@ function DetectionCard({ suggestion: s, existingTrips, isAccepted, name, color,
   onColorChange: (v: string) => void;
   presetColors: string[];
 }) {
+  const [showPreview, setShowPreview] = useState(false);
   const alreadyHasTrip = s.already_assigned > 0;
   const existingNames = s.existing_trip_ids
     .map(id => existingTrips.find(t => t.id === id)?.name)
@@ -373,6 +388,118 @@ function DetectionCard({ suggestion: s, existingTrips, isAccepted, name, color,
           </div>
         </div>
       )}
+
+      {/* Preview toggle */}
+      <button
+        onClick={() => setShowPreview(!showPreview)}
+        style={{
+          width: "100%", padding: "6px 14px", fontSize: 11, color: "var(--accent)",
+          textAlign: "left", borderTop: "1px solid rgba(255,255,255,0.06)",
+        }}
+      >
+        {showPreview ? "▾ Hide preview" : "▸ Preview photos & map"}
+      </button>
+
+      {/* Preview content */}
+      {showPreview && (
+        <div style={{ padding: "0 14px 12px" }}>
+          {/* Thumbnail strip */}
+          <div style={{ display: "flex", gap: 4, overflowX: "auto", marginBottom: 8, paddingBottom: 4 }}>
+            {s.preview_photo_ids.map(id => (
+              <img
+                key={id}
+                src={thumbnailUrl(id)}
+                alt=""
+                style={{
+                  width: 64, height: 64, objectFit: "cover", borderRadius: 4,
+                  flexShrink: 0, background: "var(--bg2)",
+                }}
+                onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            ))}
+          </div>
+
+          {/* Mini map */}
+          {s.preview_pins.length > 0 && (
+            <MiniMap pins={s.preview_pins} color={color} />
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function MiniMap({ pins, color }: { pins: { id: number; lat: number; lon: number }[]; color: string }) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    if (!mapRef.current || mapInstanceRef.current) return;
+
+    const map = L.map(mapRef.current, {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom: false,
+    });
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 17,
+    }).addTo(map);
+
+    // Add markers
+    for (const pin of pins) {
+      L.circleMarker([pin.lat, pin.lon], {
+        radius: 4, color, fillColor: color, fillOpacity: 0.8, weight: 1,
+      }).addTo(map);
+    }
+
+    // Convex hull polygon
+    if (pins.length >= 3) {
+      const pts: [number, number][] = pins.map(p => [p.lat, p.lon]);
+      // Simple convex hull
+      const sorted = [...pts].sort((a, b) => a[1] !== b[1] ? a[1] - b[1] : a[0] - b[0]);
+      const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+        (a[1] - o[1]) * (b[0] - o[0]) - (a[0] - o[0]) * (b[1] - o[1]);
+      const lower: [number, number][] = [];
+      for (const p of sorted) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+        lower.push(p);
+      }
+      const upper: [number, number][] = [];
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const p = sorted[i];
+        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+        upper.push(p);
+      }
+      lower.pop(); upper.pop();
+      const hull = [...lower, ...upper];
+      if (hull.length >= 3) {
+        L.polygon(hull as L.LatLngTuple[], {
+          color, fillColor: color, fillOpacity: 0.25, weight: 2, dashArray: "4 3",
+        }).addTo(map);
+      }
+    }
+
+    // Fit bounds
+    const lats = pins.map(p => p.lat);
+    const lons = pins.map(p => p.lon);
+    map.fitBounds([
+      [Math.min(...lats), Math.min(...lons)],
+      [Math.max(...lats), Math.max(...lons)],
+    ], { padding: [10, 10] });
+
+    mapInstanceRef.current = map;
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+    };
+  }, [pins, color]);
+
+  return (
+    <div ref={mapRef} style={{ height: 150, borderRadius: 6, overflow: "hidden" }} />
   );
 }

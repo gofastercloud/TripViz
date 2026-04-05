@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { Photo, Trip } from "../types";
-import { getPhotos, bulkAssignTrip, thumbnailUrl } from "../api/client";
+import { getPhotos, bulkAssignTrip, thumbnailUrl, getKit, type KitDevice } from "../api/client";
 import PhotoLightbox from "./PhotoLightbox";
 
 interface Props {
@@ -19,12 +19,24 @@ export default function Gallery({ trips, onTripChange, onStatsChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [sort, setSort] = useState("date_desc");
   const [filterTripId, setFilterTripId] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [selectedDevices, setSelectedDevices] = useState<string[]>([]); // "make:model" strings
+  const [availableDevices, setAvailableDevices] = useState<KitDevice[]>([]);
+  const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [lightboxId, setLightboxId] = useState<number | null>(null);
   const [assignMenuOpen, setAssignMenuOpen] = useState(false);
   const [newTripName, setNewTripName] = useState("");
   const [newTripColor, setNewTripColor] = useState(COLORS[0]);
   const perPage = 60;
+
+  // Load available cameras/phones for filter
+  useEffect(() => {
+    getKit().then(data => {
+      setAvailableDevices([...data.cameras, ...data.phones]);
+    }).catch(() => {});
+  }, []);
 
   const loadPhotos = useCallback(async (p: number, reset: boolean) => {
     setLoading(true);
@@ -34,13 +46,16 @@ export default function Gallery({ trips, onTripChange, onStatsChange }: Props) {
       };
       if (filterTripId === "none") params.no_trip = "true";
       else if (filterTripId !== "all") params.trip_id = filterTripId;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      if (selectedDevices.length > 0) params.camera_devices = selectedDevices.join(",");
 
       const res = await getPhotos(params);
       setTotal(res.total);
       setPhotos(prev => reset ? res.photos : [...prev, ...res.photos]);
     } catch {}
     setLoading(false);
-  }, [sort, filterTripId]);
+  }, [sort, filterTripId, dateFrom, dateTo, selectedDevices]);
 
   useEffect(() => {
     setPage(1);
@@ -106,34 +121,128 @@ export default function Gallery({ trips, onTripChange, onStatsChange }: Props) {
     onStatsChange();
   };
 
+  const toggleDevice = (key: string) => {
+    setSelectedDevices(prev =>
+      prev.includes(key) ? prev.filter(d => d !== key) : [...prev, key]
+    );
+  };
+
   // Group photos by month/year
   const grouped = groupByMonth(photos);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Toolbar */}
+      {/* Toolbar row 1: filters */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
+        display: "flex", alignItems: "center", gap: 8, padding: "8px 16px",
         background: "var(--bg2)", borderBottom: "1px solid var(--border)", flexShrink: 0,
+        flexWrap: "wrap",
       }}>
         <span style={{ color: "var(--text2)", fontSize: 12 }}>
           {total.toLocaleString()} photos
         </span>
 
+        {/* Date range */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+          <label style={{ fontSize: 11, color: "var(--text2)" }}>From</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            style={{ fontSize: 11, padding: "3px 6px", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
+          />
+          <label style={{ fontSize: 11, color: "var(--text2)" }}>To</label>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
+            style={{ fontSize: 11, padding: "3px 6px", background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
+          />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+              style={{ fontSize: 11, color: "var(--text2)" }}>✕</button>
+          )}
+        </div>
+
+        {/* Camera filter */}
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setDeviceMenuOpen(o => !o)}
+            style={{
+              fontSize: 11, padding: "4px 10px", borderRadius: 4,
+              background: selectedDevices.length > 0 ? "rgba(59,130,246,0.15)" : "var(--bg3)",
+              border: `1px solid ${selectedDevices.length > 0 ? "var(--accent)" : "var(--border)"}`,
+              color: selectedDevices.length > 0 ? "var(--accent)" : "var(--text2)",
+            }}
+          >
+            {selectedDevices.length > 0
+              ? `${selectedDevices.length} camera${selectedDevices.length !== 1 ? "s" : ""}`
+              : "All cameras"} ▾
+          </button>
+          {deviceMenuOpen && (
+            <div style={{
+              position: "absolute", top: "100%", right: 0, zIndex: 100, marginTop: 4,
+              background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.5)", minWidth: 220, maxHeight: 300, overflowY: "auto",
+              padding: "6px 0",
+            }}>
+              {selectedDevices.length > 0 && (
+                <button
+                  onClick={() => setSelectedDevices([])}
+                  style={{ width: "100%", padding: "6px 12px", fontSize: 11, color: "var(--text2)", textAlign: "left" }}
+                >Clear all</button>
+              )}
+              {availableDevices.map(d => {
+                const key = `${d.make}:${d.model}`;
+                const checked = selectedDevices.includes(key);
+                return (
+                  <button
+                    key={key}
+                    onClick={() => toggleDevice(key)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, width: "100%",
+                      padding: "6px 12px", fontSize: 12, textAlign: "left",
+                      background: checked ? "rgba(59,130,246,0.08)" : "transparent",
+                    }}
+                    onMouseEnter={e => { if (!checked) e.currentTarget.style.background = "var(--bg3)"; }}
+                    onMouseLeave={e => { if (!checked) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{
+                      width: 16, height: 16, borderRadius: 3, flexShrink: 0,
+                      background: checked ? "var(--accent)" : "var(--bg3)",
+                      border: `1.5px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: 10,
+                    }}>{checked ? "✓" : ""}</span>
+                    <span style={{ flex: 1 }}>{d.display_name}</span>
+                    <span style={{ fontSize: 10, color: "var(--text2)" }}>{d.photo_count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <select value={sort} onChange={e => setSort(e.target.value)}
-          style={{ marginLeft: "auto", fontSize: 12 }}>
+          style={{ fontSize: 11 }}>
           <option value="date_desc">Newest first</option>
           <option value="date_asc">Oldest first</option>
           <option value="name_asc">Name A–Z</option>
         </select>
 
         <select value={filterTripId} onChange={e => setFilterTripId(e.target.value)}
-          style={{ fontSize: 12 }}>
+          style={{ fontSize: 11 }}>
           <option value="all">All photos</option>
           <option value="none">No trip</option>
           {trips.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
+      </div>
 
+      {/* Selection bar */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8, padding: "6px 16px",
+        background: "var(--bg2)", borderBottom: "1px solid var(--border)", flexShrink: 0,
+      }}>
         {selectedIds.size > 0 ? (
           <>
             <span style={{ color: "var(--accent)", fontSize: 12, fontWeight: 600 }}>
@@ -143,7 +252,7 @@ export default function Gallery({ trips, onTripChange, onStatsChange }: Props) {
               <button
                 onClick={() => setAssignMenuOpen(o => !o)}
                 style={{
-                  background: "var(--accent)", color: "#fff", padding: "5px 12px",
+                  background: "var(--accent)", color: "#fff", padding: "4px 12px",
                   borderRadius: "var(--radius)", fontSize: 12, fontWeight: 600,
                 }}
               >
@@ -164,10 +273,12 @@ export default function Gallery({ trips, onTripChange, onStatsChange }: Props) {
               )}
             </div>
             <button onClick={clearSelect} style={{ color: "var(--text2)", fontSize: 12 }}>✕ Clear</button>
+            <div style={{ flex: 1 }} />
           </>
         ) : (
-          <button onClick={selectAll} style={{ color: "var(--text2)", fontSize: 12 }}>Select all</button>
+          <div style={{ flex: 1 }} />
         )}
+        <button onClick={selectAll} style={{ color: "var(--text2)", fontSize: 11 }}>Select all</button>
       </div>
 
       {/* Grid */}
