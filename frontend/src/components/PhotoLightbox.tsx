@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { Trip, FaceBox } from "../types";
-import { getPhoto, assignTrip, imageUrl, thumbnailUrl, getPhotoFaces, analyzePhoto } from "../api/client";
+import { getPhoto, assignTrip, imageUrl, thumbnailUrl, getPhotoFaces, analyzePhoto, editPhotoPreview, editPhotoSave } from "../api/client";
+import type { EditParams } from "../api/client";
 
 interface Props {
   photoId: number;
@@ -14,22 +15,61 @@ interface Props {
 export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, onNext, onPrev }: Props) {
   const [photo, setPhoto] = useState<Awaited<ReturnType<typeof getPhoto>> | null>(null);
   const [assigning, setAssigning] = useState(false);
-  const [activeTab, setActiveTab] = useState<"info" | "histogram" | "ml">("info");
+  const [activeTab, setActiveTab] = useState<"info" | "histogram" | "ml" | "edit">("info");
   const [faces, setFaces] = useState<FaceBox[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
 
+  const defaultEditParams: EditParams = {
+    white_balance: "none", temperature: 0,
+    filter: "none", brightness: 0, contrast: 0, saturation: 0,
+  };
+  const [editParams, setEditParams] = useState<EditParams>(defaultEditParams);
+  const [editPreviewUrl, setEditPreviewUrl] = useState<string | null>(null);
+  const [editPreviewing, setEditPreviewing] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editSaveMsg, setEditSaveMsg] = useState("");
+  const editDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editPreviewRevoke = useRef<string | null>(null);
+
   const loadPhoto = useCallback(async (id: number) => {
     setPhoto(null);
+    setEditParams(defaultEditParams);
+    setEditPreviewUrl(null);
+    setEditSaveMsg("");
     const [p, f] = await Promise.all([
       getPhoto(id).catch(() => null),
       getPhotoFaces(id).catch(() => [] as FaceBox[]),
     ]);
     setPhoto(p);
     setFaces(f);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { loadPhoto(photoId); }, [photoId, loadPhoto]);
+
+  // Refresh edit preview whenever params or tab changes
+  useEffect(() => {
+    if (activeTab !== "edit") return;
+    if (editDebounceRef.current) clearTimeout(editDebounceRef.current);
+    editDebounceRef.current = setTimeout(async () => {
+      setEditPreviewing(true);
+      try {
+        const url = await editPhotoPreview(photoId, editParams);
+        if (editPreviewRevoke.current) URL.revokeObjectURL(editPreviewRevoke.current);
+        editPreviewRevoke.current = url;
+        setEditPreviewUrl(url);
+      } catch { /* ignore */ }
+      setEditPreviewing(false);
+    }, 350);
+    return () => { if (editDebounceRef.current) clearTimeout(editDebounceRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editParams, activeTab, photoId]);
+
+  // Revoke object URL on unmount
+  useEffect(() => () => {
+    if (editPreviewRevoke.current) URL.revokeObjectURL(editPreviewRevoke.current);
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -88,11 +128,13 @@ export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, o
         {/* Image with face overlays */}
         <div style={{ position: "relative", background: "#000", flexShrink: 0 }}>
           <img
-            src={imageUrl(photoId)}
+            src={activeTab === "edit" && editPreviewUrl ? editPreviewUrl : imageUrl(photoId)}
             alt=""
             style={{
               maxWidth: "70vw", maxHeight: "90vh",
               objectFit: "contain", display: "block",
+              opacity: activeTab === "edit" && editPreviewing ? 0.6 : 1,
+              transition: "opacity 0.15s",
             }}
           />
           {faces.length > 0 && photo && (
@@ -128,7 +170,7 @@ export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, o
             padding: "10px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0,
           }}>
             <div style={{ display: "flex", gap: 2 }}>
-              {(["info", "histogram", "ml"] as const).map(t => (
+              {(["info", "histogram", "ml", "edit"] as const).map(t => (
                 <TabBtn key={t} label={t === "ml" ? "ML" : t.charAt(0).toUpperCase() + t.slice(1)}
                   active={activeTab === t} onClick={() => setActiveTab(t)} />
               ))}
@@ -142,6 +184,30 @@ export default function PhotoLightbox({ photoId, trips, onClose, onTripChange, o
                 <InfoPanel photo={photo} trips={trips} assigning={assigning} onAssign={handleAssign} />
               ) : activeTab === "histogram" ? (
                 <HistogramPanel photoId={photoId} />
+              ) : activeTab === "edit" ? (
+                <EditPanel
+                  photoId={photoId}
+                  params={editParams}
+                  onChange={setEditParams}
+                  saving={editSaving}
+                  saveMsg={editSaveMsg}
+                  onSave={async (mode) => {
+                    setEditSaving(true);
+                    setEditSaveMsg("");
+                    try {
+                      const result = await editPhotoSave(photoId, { ...editParams, save_mode: mode });
+                      setEditSaveMsg(`Saved: ${result.filename}`);
+                    } catch (e: unknown) {
+                      setEditSaveMsg(e instanceof Error ? e.message : "Save failed");
+                    }
+                    setEditSaving(false);
+                  }}
+                  onReset={() => {
+                    setEditParams(defaultEditParams);
+                    setEditPreviewUrl(null);
+                    setEditSaveMsg("");
+                  }}
+                />
               ) : (
                 <MLTab
                   photo={photo}
@@ -205,6 +271,171 @@ function FaceOverlay({ faces, photo }: { faces: FaceBox[]; photo: ReturnType<typ
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── Edit panel ───────────────────────────────────────────────────
+
+const FILTERS: { key: EditParams["filter"]; label: string; color?: string }[] = [
+  { key: "none",    label: "Original" },
+  { key: "vivid",   label: "Vivid",   color: "#F59E0B" },
+  { key: "muted",   label: "Muted",   color: "#9CA3AF" },
+  { key: "warm",    label: "Warm",    color: "#EF8C34" },
+  { key: "cool",    label: "Cool",    color: "#60A5FA" },
+  { key: "bw",      label: "B&W",     color: "#D1D5DB" },
+  { key: "vintage", label: "Vintage", color: "#A78BFA" },
+];
+
+function EditPanel({ params, onChange, saving, saveMsg, onSave, onReset }: {
+  photoId: number;
+  params: EditParams;
+  onChange: (p: EditParams) => void;
+  saving: boolean;
+  saveMsg: string;
+  onSave: (mode: "export" | "version") => void;
+  onReset: () => void;
+}) {
+  const set = (patch: Partial<EditParams>) => onChange({ ...params, ...patch });
+
+  const isDefault =
+    params.white_balance === "none" &&
+    params.temperature === 0 &&
+    params.filter === "none" &&
+    params.brightness === 0 &&
+    params.contrast === 0 &&
+    params.saturation === 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* Filters */}
+      <div>
+        <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 8 }}>Filter</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 }}>
+          {FILTERS.map(({ key, label, color }) => {
+            const active = params.filter === key;
+            return (
+              <button key={key} onClick={() => set({ filter: key })} style={{
+                padding: "5px 2px", borderRadius: 5, fontSize: 10,
+                fontWeight: active ? 700 : 400,
+                border: `1.5px solid ${active ? (color ?? "var(--accent)") : "var(--border)"}`,
+                background: active ? (color ? color + "22" : "rgba(59,130,246,0.12)") : "var(--bg3)",
+                color: active ? (color ?? "var(--accent)") : "var(--text2)",
+                cursor: "pointer",
+              }}>{label}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* White balance */}
+      <div>
+        <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 6 }}>White Balance</div>
+        <button
+          onClick={() => set({ white_balance: params.white_balance === "auto" ? "none" : "auto" })}
+          style={{
+            width: "100%", padding: "6px 0", borderRadius: 5, fontSize: 12,
+            border: `1.5px solid ${params.white_balance === "auto" ? "var(--accent)" : "var(--border)"}`,
+            background: params.white_balance === "auto" ? "rgba(59,130,246,0.12)" : "var(--bg3)",
+            color: params.white_balance === "auto" ? "var(--accent)" : "var(--text2)",
+            cursor: "pointer",
+          }}
+        >
+          {params.white_balance === "auto" ? "Auto WB On" : "Auto WB"}
+        </button>
+      </div>
+
+      {/* Temperature */}
+      <EditSlider
+        label="Temperature"
+        value={params.temperature}
+        min={-100} max={100}
+        leftLabel="Cool" rightLabel="Warm"
+        onChange={v => set({ temperature: v })}
+      />
+
+      {/* Fine tuning */}
+      <div>
+        <div style={{ fontSize: 10, color: "var(--text2)", textTransform: "uppercase", marginBottom: 8 }}>Adjustments</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <EditSlider label="Brightness" value={params.brightness} min={-100} max={100}
+            onChange={v => set({ brightness: v })} />
+          <EditSlider label="Contrast"   value={params.contrast}   min={-100} max={100}
+            onChange={v => set({ contrast: v })} />
+          <EditSlider label="Saturation" value={params.saturation} min={-100} max={100}
+            onChange={v => set({ saturation: v })} />
+        </div>
+      </div>
+
+      {/* Save buttons */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 4 }}>
+        {!isDefault && (
+          <button onClick={onReset} style={{
+            padding: "5px 0", borderRadius: 5, fontSize: 11,
+            border: "1px solid var(--border)", color: "var(--text2)",
+          }}>Reset</button>
+        )}
+        <button
+          onClick={() => onSave("export")}
+          disabled={saving || isDefault}
+          style={{
+            width: "100%", padding: "7px 0", borderRadius: 6, fontSize: 12, fontWeight: 600,
+            background: isDefault ? "var(--bg3)" : "var(--accent)", color: isDefault ? "var(--text2)" : "#fff",
+            opacity: saving ? 0.5 : 1, cursor: isDefault ? "default" : "pointer",
+          }}
+        >
+          {saving ? "Saving…" : "Export as new file"}
+        </button>
+        <button
+          onClick={() => onSave("version")}
+          disabled={saving || isDefault}
+          style={{
+            width: "100%", padding: "6px 0", borderRadius: 6, fontSize: 12,
+            border: "1px solid var(--border)", color: isDefault ? "var(--text2)" : "var(--text)",
+            opacity: saving ? 0.5 : 1, cursor: isDefault ? "default" : "pointer",
+          }}
+        >
+          {saving ? "Saving…" : "Save version"}
+        </button>
+        {saveMsg && (
+          <div style={{
+            fontSize: 11, padding: "6px 8px", borderRadius: 4,
+            background: saveMsg.startsWith("Saved") ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+            border: `1px solid ${saveMsg.startsWith("Saved") ? "#22C55E" : "var(--danger)"}`,
+            color: saveMsg.startsWith("Saved") ? "#4ADE80" : "#FCA5A5",
+            wordBreak: "break-all",
+          }}>{saveMsg}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditSlider({ label, value, min, max, leftLabel, rightLabel, onChange }: {
+  label: string; value: number; min: number; max: number;
+  leftLabel?: string; rightLabel?: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+        <span style={{ fontSize: 11, color: "var(--text2)" }}>{label}</span>
+        <span style={{ fontSize: 11, color: value !== 0 ? "var(--accent)" : "var(--text2)" }}>
+          {value > 0 ? `+${value}` : value}
+        </span>
+      </div>
+      {leftLabel && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+          <span style={{ fontSize: 9, color: "var(--text2)" }}>{leftLabel}</span>
+          <span style={{ fontSize: 9, color: "var(--text2)" }}>{rightLabel}</span>
+        </div>
+      )}
+      <input
+        type="range" min={min} max={max} value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        style={{ width: "100%", accentColor: "var(--accent)" }}
+      />
     </div>
   );
 }

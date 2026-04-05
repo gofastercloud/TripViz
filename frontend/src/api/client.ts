@@ -180,6 +180,37 @@ export interface KitData {
 
 export const getKit = () => request<KitData>("/kit");
 
+// ── Editing ───────────────────────────────────────────────────
+export interface EditParams {
+  white_balance: "auto" | "none";
+  temperature: number;
+  filter: "none" | "vivid" | "muted" | "warm" | "cool" | "bw" | "vintage";
+  brightness: number;
+  contrast: number;
+  saturation: number;
+}
+
+export const editPhotoPreview = async (photoId: number, params: EditParams): Promise<string> => {
+  const res = await fetch(`${BASE}/photos/${photoId}/edit/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error("Preview failed");
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+};
+
+export const editPhotoSave = (
+  photoId: number,
+  params: EditParams & { save_mode: "export" | "version" },
+) =>
+  request<{ saved_to: string; filename: string }>(`/photos/${photoId}/edit/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+
 // ── URLs ──────────────────────────────────────────────────────
 export const thumbnailUrl = (id: number) => `${BASE}/photos/${id}/thumbnail`;
 export const imageUrl = (id: number) => `${BASE}/photos/${id}/image`;
