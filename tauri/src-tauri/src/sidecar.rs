@@ -91,42 +91,57 @@ pub fn resolve_data_dir() -> PathBuf {
     base.unwrap_or_else(|| PathBuf::from(".")).join("TripViz")
 }
 
-/// Resolve the bundled sidecar binary path. In dev, Tauri expects a target-triple
-/// suffixed binary under `src-tauri/binaries/`. In a bundled build it lives next
-/// to the main executable. We try several locations.
-pub fn resolve_sidecar_binary(src_tauri_dir: &Path, bin_name: &str) -> Option<PathBuf> {
+/// Resolve the bundled sidecar binary path.
+///
+/// Two modes:
+/// - `is_dev == true`: look under `src-tauri/binaries/` for the shell stub
+///   (used by `cargo tauri dev` and `cargo test`).
+/// - `is_dev == false`: look under `<resource_dir>/backend/` for the real
+///   PyInstaller output bundled as a Tauri resource.
+///
+/// `src_tauri_dir` is only consulted in dev mode.
+/// `resource_dir` is only consulted in production mode. Either may be `None`
+/// if not applicable.
+pub fn resolve_sidecar_binary(
+    is_dev: bool,
+    src_tauri_dir: Option<&Path>,
+    resource_dir: Option<&Path>,
+    bin_name: &str,
+) -> Option<PathBuf> {
     let ext = if cfg!(windows) { ".exe" } else { "" };
+    let file_name = format!("{}{}", bin_name, ext);
 
-    // Candidate 1: alongside the running executable (bundled build).
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let p = parent.join(format!("{}{}", bin_name, ext));
-            if p.exists() {
-                return Some(p);
+    if is_dev {
+        let src_tauri_dir = src_tauri_dir?;
+
+        // Dev candidate 1: src-tauri/binaries/<name>[.exe] (dev stub).
+        let stub = src_tauri_dir.join("binaries").join(&file_name);
+        if stub.exists() {
+            return Some(stub);
+        }
+
+        // Dev candidate 2: src-tauri/binaries/<name>-<triple>[.exe] — scan.
+        let bin_dir = src_tauri_dir.join("binaries");
+        if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let name_s = name.to_string_lossy();
+                if name_s.starts_with(bin_name) && !name_s.ends_with(".py") {
+                    return Some(e.path());
+                }
             }
         }
+        return None;
     }
 
-    // Candidate 2: src-tauri/binaries/<name>[.exe] (dev stub).
-    let stub = src_tauri_dir
-        .join("binaries")
-        .join(format!("{}{}", bin_name, ext));
-    if stub.exists() {
-        return Some(stub);
+    // Production: resource_dir/backend/<name>[.exe].
+    // Tauri copies the bundled resources into a platform-specific location;
+    // the caller passes the value from `app.path().resource_dir()`.
+    let resource_dir = resource_dir?;
+    let candidate = resource_dir.join("backend").join(&file_name);
+    if candidate.exists() {
+        return Some(candidate);
     }
-
-    // Candidate 3: src-tauri/binaries/<name>-<triple>[.exe] — scan for any.
-    let bin_dir = src_tauri_dir.join("binaries");
-    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
-        for e in entries.flatten() {
-            let name = e.file_name();
-            let name_s = name.to_string_lossy();
-            if name_s.starts_with(bin_name) {
-                return Some(e.path());
-            }
-        }
-    }
-
     None
 }
 
@@ -156,6 +171,13 @@ impl SidecarHandle {
         let log_err = log.try_clone().map_err(SidecarError::SpawnFailed)?;
 
         let mut cmd = Command::new(binary);
+        // PyInstaller's one-folder output resolves _MEIPASS relative to an
+        // absolute sys.executable, which is correct as long as `binary` is
+        // absolute. We additionally set cwd to the binary's parent so any
+        // relative lookups (logs, ad-hoc file reads) also work.
+        if let Some(parent) = binary.parent() {
+            cmd.current_dir(parent);
+        }
         cmd.env("TRIPVIZ_API_ONLY", "1")
             .env("TRIPVIZ_DATA_DIR", data_dir)
             .env("TRIPVIZ_HOST", host)
@@ -325,9 +347,40 @@ mod tests {
     #[test]
     fn resolve_sidecar_binary_finds_stub() {
         let here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let bin = resolve_sidecar_binary(&here, "tripviz-backend");
+        let bin = resolve_sidecar_binary(true, Some(&here), None, "tripviz-backend");
         assert!(bin.is_some(), "expected to find a stub under binaries/");
         assert!(bin.unwrap().exists());
+    }
+
+    #[test]
+    fn resolve_sidecar_binary_prod_uses_resource_dir() {
+        // Fake resource dir containing backend/tripviz-backend[.exe].
+        let tmp = std::env::temp_dir().join(format!(
+            "tripviz-resolve-prod-{}",
+            std::process::id()
+        ));
+        let backend_dir = tmp.join("backend");
+        std::fs::create_dir_all(&backend_dir).unwrap();
+        let ext = if cfg!(windows) { ".exe" } else { "" };
+        let fake_bin = backend_dir.join(format!("tripviz-backend{}", ext));
+        std::fs::write(&fake_bin, b"#!/bin/sh\n").unwrap();
+
+        let found = resolve_sidecar_binary(false, None, Some(&tmp), "tripviz-backend");
+        assert_eq!(found.as_deref(), Some(fake_bin.as_path()));
+
+        // Production lookup must NOT fall back to dev stubs.
+        let empty = std::env::temp_dir().join(format!(
+            "tripviz-resolve-prod-empty-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&empty).unwrap();
+        let not_found =
+            resolve_sidecar_binary(false, None, Some(&empty), "tripviz-backend");
+        assert!(not_found.is_none());
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 
     /// End-to-end smoke test against the shell stub. Spawns the stub backend,
@@ -335,7 +388,7 @@ mod tests {
     #[test]
     fn end_to_end_spawn_health_shutdown() {
         let here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let bin = resolve_sidecar_binary(&here, "tripviz-backend")
+        let bin = resolve_sidecar_binary(true, Some(&here), None, "tripviz-backend")
             .expect("stub binary present");
         let tmp = std::env::temp_dir().join("tripviz-sidecar-test");
         std::fs::create_dir_all(&tmp).unwrap();

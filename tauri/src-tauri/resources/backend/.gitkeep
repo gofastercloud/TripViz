@@ -1,0 +1,3 @@
+Placeholder so Tauri's resources glob has at least one match in a clean checkout.
+The PyInstaller output (tripviz-backend[.exe] + _internal/) is copied here by
+scripts/build_windows.py before `cargo tauri build` runs.

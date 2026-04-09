@@ -37,9 +37,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/tripviz-backend"
-    ],
-    "resources": []
+    "resources": {
+      "resources/backend/**/*": "backend/"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["English"]
+      }
+    }
   }
 }
