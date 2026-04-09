@@ -7,7 +7,13 @@ import os
 from database import init_db
 from routers import photos, trips, indexing, ml, kit, detect, editing
 
-app = FastAPI(title="TripViz", version="1.0.0")
+APP_VERSION = "1.0.0"
+app = FastAPI(title="TripViz", version=APP_VERSION)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "version": APP_VERSION}
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,10 +31,11 @@ app.include_router(kit.router)
 app.include_router(detect.router)
 app.include_router(editing.router)
 
-# Serve built frontend if present
+# Serve built frontend if present (skip entirely in API-only mode — Tauri will serve UI)
+_api_only = os.environ.get("TRIPVIZ_API_ONLY", "").strip() in ("1", "true", "True", "yes")
 _bundle_dir = os.environ.get("TRIPVIZ_BUNDLE_DIR", os.path.join(os.path.dirname(__file__), ".."))
 FRONTEND_DIST = os.path.join(_bundle_dir, "frontend", "dist")
-if os.path.isdir(FRONTEND_DIST):
+if not _api_only and os.path.isdir(FRONTEND_DIST):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
     @app.get("/")
