@@ -38,13 +38,30 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir).ok();
             let log_file = data_dir.join("tauri-sidecar.log");
 
-            // In dev the CARGO_MANIFEST_DIR points at src-tauri; in a bundled
-            // build it won't exist but resolve_sidecar_binary will fall through
-            // to current_exe() lookup.
+            // In dev (debug builds) CARGO_MANIFEST_DIR points at src-tauri and
+            // we resolve the shell stub under `binaries/`. In a bundled build
+            // we consult Tauri's resource dir for the PyInstaller output.
+            let is_dev = cfg!(debug_assertions);
             let src_tauri_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let resource_dir = app.path().resource_dir().ok();
 
-            let binary = resolve_sidecar_binary(&src_tauri_dir, "tripviz-backend")
-                .ok_or("tripviz-backend binary not found (dev stub expected at src-tauri/binaries/tripviz-backend)")?;
+            let binary = resolve_sidecar_binary(
+                is_dev,
+                Some(src_tauri_dir.as_path()),
+                resource_dir.as_deref(),
+                "tripviz-backend",
+            )
+            .ok_or_else(|| {
+                if is_dev {
+                    "tripviz-backend dev stub not found under src-tauri/binaries/"
+                        .to_string()
+                } else {
+                    format!(
+                        "tripviz-backend not found under resource_dir={:?}/backend/",
+                        resource_dir
+                    )
+                }
+            })?;
             log::info!("resolved backend binary: {:?}", binary);
 
             let port = find_free_port(DEFAULT_PORT, MAX_PORT)

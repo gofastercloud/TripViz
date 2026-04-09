@@ -354,3 +354,11 @@ backend/venv/
 backend/tripviz.log
 frontend/dist/
 backend/ml_models/
+
+# Windows packaging (Wave 2)
+dist-installers/
+dist/
+build/
+tauri/src-tauri/target/
+tauri/src-tauri/resources/backend/*
+!tauri/src-tauri/resources/backend/.gitkeep

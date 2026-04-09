@@ -1,0 +1,173 @@
+name: windows-build
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  workflow_dispatch:
+    inputs:
+      build_x64:
+        description: "Build x64 (full variant)"
+        type: boolean
+        default: true
+      build_arm64:
+        description: "Build arm64 (lean variant)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-x64:
+    name: Build Windows x64 (full)
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.build_x64 == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6.0.1
+        with:
+          version: "0.5.14"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4.1.0
+        with:
+          node-version: "20.18.0"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.82.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-x64-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-x64-
+
+      - name: Cache cargo target
+        uses: actions/cache@v4.2.0
+        with:
+          path: tauri/src-tauri/target
+          key: cargo-target-${{ runner.os }}-x64-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-x64-
+
+      - name: Cache pip
+        uses: actions/cache@v4.2.0
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-x64-${{ hashFiles('backend/requirements.txt', 'backend/requirements-ml.txt') }}
+
+      - name: Install backend dependencies (full = base + ML)
+        shell: pwsh
+        run: |
+          uv pip install --system -r backend/requirements.txt
+          uv pip install --system -r backend/requirements-ml.txt
+          uv pip install --system pyinstaller==6.11.1
+
+      - name: Install cargo-tauri CLI
+        run: cargo install tauri-cli --version 2.1.0 --locked
+
+      - name: Build installer
+        shell: pwsh
+        run: python scripts/build_windows.py --variant full --arch x64
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: TripViz-full-x64-Setup
+          path: dist-installers/TripViz-full-x64-Setup.exe
+          if-no-files-found: error
+
+  build-arm64:
+    name: Build Windows arm64 (lean)
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.build_arm64 == 'true'
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6.0.1
+        with:
+          version: "0.5.14"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.3.0
+        with:
+          python-version: "3.11.9"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4.1.0
+        with:
+          node-version: "20.18.0"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.82.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-arm64-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-arm64-
+
+      - name: Cache cargo target
+        uses: actions/cache@v4.2.0
+        with:
+          path: tauri/src-tauri/target
+          key: cargo-target-${{ runner.os }}-arm64-${{ hashFiles('tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-arm64-
+
+      - name: Cache pip
+        uses: actions/cache@v4.2.0
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-arm64-${{ hashFiles('backend/requirements.txt') }}
+
+      - name: Install backend dependencies (lean = base only, no ML)
+        shell: pwsh
+        run: |
+          uv pip install --system -r backend/requirements.txt
+          uv pip install --system pyinstaller==6.11.1
+
+      - name: Install cargo-tauri CLI
+        run: cargo install tauri-cli --version 2.1.0 --locked
+
+      - name: Build installer
+        shell: pwsh
+        run: python scripts/build_windows.py --variant lean --arch arm64
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: TripViz-lean-arm64-Setup
+          path: dist-installers/TripViz-lean-arm64-Setup.exe
+          if-no-files-found: error
