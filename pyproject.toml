@@ -1,0 +1,17 @@
+[project]
+name = "tripviz-tools"
+version = "0.0.0"
+description = "Repo-root project shim for running TripViz dev tooling via `uv run`."
+requires-python = ">=3.11"
+dependencies = [
+    "pillow==10.4.0",
+    "piexif==1.1.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv]
+package = false
