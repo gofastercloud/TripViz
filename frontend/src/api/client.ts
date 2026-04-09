@@ -3,10 +3,46 @@ import type {
   MLCapabilities, FaceBox, Person, BatchAnalysisStatus,
 } from "../types";
 
+// Detect Tauri runtime. In Tauri v2 the webview injects __TAURI_INTERNALS__.
+// When inside Tauri the frontend is served from tauri://localhost (or a custom
+// protocol) so we must hit the sidecar backend via an absolute URL. Outside
+// Tauri we keep the relative "/api" path, which Vite proxies in dev and
+// FastAPI serves in the legacy standalone mode.
+const isTauri = typeof window !== "undefined" &&
+  typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
+
+let apiOrigin = "";
+
+async function resolveApiOrigin(): Promise<string> {
+  if (!isTauri) return "";
+  if (apiOrigin) return apiOrigin;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const url = await invoke<string>("get_backend_url");
+    apiOrigin = url.replace(/\/$/, "");
+    return apiOrigin;
+  } catch {
+    apiOrigin = "http://127.0.0.1:8000";
+    return apiOrigin;
+  }
+}
+
+// Kick off resolution early so the first request has it cached.
+if (isTauri) {
+  void resolveApiOrigin();
+}
+
 const BASE = "/api";
 
+function fullUrl(path: string): string {
+  return `${apiOrigin}${BASE}${path}`;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + url, options);
+  if (isTauri && !apiOrigin) {
+    await resolveApiOrigin();
+  }
+  const res = await fetch(fullUrl(url), options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     const detail = err.detail;
@@ -223,7 +259,8 @@ export interface EditParams {
 }
 
 export const editPhotoPreview = async (photoId: number, params: EditParams): Promise<string> => {
-  const res = await fetch(`${BASE}/photos/${photoId}/edit/preview`, {
+  if (isTauri && !apiOrigin) await resolveApiOrigin();
+  const res = await fetch(fullUrl(`/photos/${photoId}/edit/preview`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -244,5 +281,8 @@ export const editPhotoSave = (
   });
 
 // ── URLs ──────────────────────────────────────────────────────
-export const thumbnailUrl = (id: number) => `${BASE}/photos/${id}/thumbnail`;
-export const imageUrl = (id: number) => `${BASE}/photos/${id}/image`;
+// In Tauri these must be absolute because the webview origin differs from
+// the sidecar backend. Outside Tauri we keep the relative path so Vite's
+// dev proxy and the legacy standalone FastAPI static mount both work.
+export const thumbnailUrl = (id: number) => `${apiOrigin}${BASE}/photos/${id}/thumbnail`;
+export const imageUrl = (id: number) => `${apiOrigin}${BASE}/photos/${id}/image`;
